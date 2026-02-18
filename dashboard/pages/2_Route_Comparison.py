@@ -99,22 +99,22 @@ uid, tid = selected_trip.split('-')
 segments_query = f"""
 WITH ordered_points AS (
     SELECT 
-        LATITUDE,
-        LONGITUDE,
+        LAT,
+        LNG,
         SPEED,
-        ST_MAKEPOINT(LONGITUDE, LATITUDE) as point,
-        TIMESTAMP_LOCAL,
-        ROW_NUMBER() OVER (ORDER BY TIMESTAMP_LOCAL) as rn
+        GEOMETRY as point,
+        EVENT_TIMESTAMP,
+        ROW_NUMBER() OVER (ORDER BY EVENT_TIMESTAMP) as rn
     FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
     WHERE UID = '{uid}' AND TID = '{tid}'
-    ORDER BY TIMESTAMP_LOCAL
+    ORDER BY EVENT_TIMESTAMP
 ),
 segments AS (
     SELECT 
-        p1.LATITUDE as lat1,
-        p1.LONGITUDE as lon1,
-        p2.LATITUDE as lat2,
-        p2.LONGITUDE as lon2,
+        p1.LAT as lat1,
+        p1.LNG as lon1,
+        p2.LAT as lat2,
+        p2.LNG as lon2,
         ST_MAKELINE(p1.point, p2.point) as segment_geom,
         (p1.SPEED + p2.SPEED) / 2 as avg_speed,
         p1.rn
@@ -151,13 +151,13 @@ start_lon = segments_df.iloc[0]['LON1']
 end_lat = segments_df.iloc[-1]['LAT2']
 end_lon = segments_df.iloc[-1]['LON2']
 
-# Get overall trip geometry
+# Get overall trip geometry using ST_MAKELINE aggregate
 trip_geom_query = f"""
 SELECT 
-    ST_MAKELINE(ST_MAKEPOINT(LONGITUDE, LATITUDE)) as trip_line
+    ST_MAKELINE(GEOMETRY) as trip_line
 FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
 WHERE UID = '{uid}' AND TID = '{tid}'
-ORDER BY TIMESTAMP_LOCAL
+ORDER BY EVENT_TIMESTAMP
 """
 
 trip_geom_df = session.sql(trip_geom_query).to_pandas()
