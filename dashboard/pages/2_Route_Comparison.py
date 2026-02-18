@@ -37,11 +37,11 @@ with st.sidebar:
     
     # Filter by country
     countries = ['All'] + sorted(trips_df['COUNTRY_NAME'].dropna().unique().tolist())
-    selected_country = st.selectbox("Filter by Country", countries)
+    selected_country = st.selectbox("Filter by Country", countries, key="country_filter")
     
     # Filter by transportation mode
     modes = ['All'] + sorted(trips_df['TRANSPORTATION_MODE'].dropna().unique().tolist())
-    selected_mode = st.selectbox("Filter by Mode", modes)
+    selected_mode = st.selectbox("Filter by Mode", modes, key="mode_filter")
     
     # Apply filters
     filtered_df = trips_df.copy()
@@ -59,7 +59,8 @@ with st.sidebar:
     selected_trip = st.selectbox(
         "Select Trip ID",
         trip_options,
-        format_func=lambda x: f"{x} ({filtered_df[filtered_df['TRIP_ID']==x]['TRANSPORTATION_MODE'].iloc[0]}, {filtered_df[filtered_df['TRIP_ID']==x]['POINTS'].iloc[0]} pts)"
+        format_func=lambda x: f"{x} ({filtered_df[filtered_df['TRIP_ID']==x]['TRANSPORTATION_MODE'].iloc[0]}, {filtered_df[filtered_df['TRIP_ID']==x]['POINTS'].iloc[0]} pts)",
+        key="trip_selector"
     )
     
     st.divider()
