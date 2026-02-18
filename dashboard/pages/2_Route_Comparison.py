@@ -56,11 +56,14 @@ with st.sidebar:
         st.warning("No trips match the selected filters")
         st.stop()
     
+    # Show filtered count
+    st.caption(f"Showing {len(trip_options)} trips")
+    
     selected_trip = st.selectbox(
         "Select Trip ID",
         trip_options,
         format_func=lambda x: f"{x} ({filtered_df[filtered_df['TRIP_ID']==x]['TRANSPORTATION_MODE'].iloc[0]}, {filtered_df[filtered_df['TRIP_ID']==x]['POINTS'].iloc[0]} pts)",
-        key="trip_selector"
+        index=0  # Always default to first trip in filtered list
     )
     
     st.divider()
