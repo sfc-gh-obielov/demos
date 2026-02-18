@@ -11,7 +11,7 @@ st.set_page_config(
 
 session = get_active_session()
 
-st.title("📊 Fleet Analytics Overview")
+st.title("Fleet Analytics Overview")
 st.markdown("Detailed analysis of GPS trajectory data")
 
 with st.sidebar:

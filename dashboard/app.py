@@ -9,15 +9,15 @@ st.set_page_config(
 
 session = get_active_session()
 
-st.title("🚗 Fleet Analytics Dashboard")
+st.title("Fleet Analytics Dashboard")
 st.markdown("Analysis of GPS trajectory data from the GeoLife dataset")
 
-st.info("👈 Select a page from the sidebar to explore different analytics")
+st.info("Select a page from the sidebar to explore different analytics")
 
 st.markdown("### Available Pages:")
 st.markdown("""
-- **📊 Overview** - Summary statistics and distributions
-- **🗺️ Route Comparison** - Compare actual GPS routes with OpenRouteService calculated routes
+- **Overview** - Summary statistics and distributions
+- **Route Comparison** - Compare actual GPS routes with OpenRouteService calculated routes
 """)
 
 st.divider()

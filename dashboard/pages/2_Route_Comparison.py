@@ -11,7 +11,7 @@ st.set_page_config(
 
 session = get_active_session()
 
-st.title("🗺️ Route Comparison")
+st.title("Route Comparison")
 st.markdown("Compare actual GPS trajectories with OpenRouteService calculated routes")
 
 # Get list of trips
@@ -178,7 +178,7 @@ actual_distance_km = segments_df.iloc[0]['TOTAL_DISTANCE_KM']
 
 st.divider()
 
-st.subheader("📍 Route Details")
+st.subheader("Route Details")
 
 col1, col2 = st.columns(2)
 
@@ -229,7 +229,7 @@ st.divider()
 
 # Comparison metrics
 if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
-    st.subheader("📊 Route Comparison")
+    st.subheader("Route Comparison")
     
     ors_result = st.session_state['ors_result']
     ors_distance = ors_result['DISTANCE_KM'].iloc[0]
@@ -267,9 +267,6 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
             delta_color="inverse"
         )
 
-# Create map visualization
-st.subheader("🗺️ Map Visualization")
-
 # Calculate center
 center_lat = (start_lat + end_lat) / 2
 center_lon = (start_lon + end_lon) / 2
@@ -280,7 +277,8 @@ for _, row in segments_df.iterrows():
     segment_paths.append({
         "path": [[row['LON1'], row['LAT1']], [row['LON2'], row['LAT2']]],
         "color": eval(row['COLOR']),  # Convert string representation to list
-        "speed": row['AVG_SPEED']
+        "speed": row['AVG_SPEED'],
+        "tooltip": f"Actual route - Speed: {row['AVG_SPEED']:.1f} km/h"
     })
 
 # Create layers
@@ -332,7 +330,10 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
             layers.append(
                 pdk.Layer(
                     "PathLayer",
-                    data=[{"path": ors_path}],
+                    data=[{
+                        "path": ors_path,
+                        "tooltip": "Optimal Route"
+                    }],
                     get_path="path",
                     get_color=[0, 100, 255, 220],  # Blue for ORS route
                     get_width=4,
@@ -355,9 +356,7 @@ r = pdk.Deck(
     layers=layers,
     initial_view_state=view_state,
     map_style='light',
-    tooltip={
-        "text": "Speed: {speed} km/h" if segment_paths else None
-    }
+    tooltip={"text": "{tooltip}"}
 )
 
 st.pydeck_chart(r)
