@@ -207,9 +207,9 @@ with st.spinner("Calculating OpenRouteService route..."):
         )
         SELECT 
             TO_GEOGRAPHY(response:features[0]:geometry) AS geometry,
+            response:features[0]:geometry AS geometry_geojson,
             ROUND(response:features[0]:properties:summary:distance::NUMBER / 1000, 2) AS distance_km,
-            ROUND(response:features[0]:properties:summary:duration::NUMBER / 60, 2) AS duration_minutes,
-            response AS full_payload
+            ROUND(response:features[0]:properties:summary:duration::NUMBER / 60, 2) AS duration_minutes
         FROM result
         """
         
@@ -318,18 +318,13 @@ layers = [
 # Add ORS route if calculated
 if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
     try:
-        ors_geom = st.session_state['ors_result']['GEOMETRY'].iloc[0]
+        ors_result = st.session_state['ors_result']
         
-        # Get coordinates from GeoJSON
-        ors_geojson_query = f"""
-        SELECT ST_ASGEOJSON('{ors_geom}')::VARIANT as geojson
-        """
+        # Extract coordinates from geometry_geojson (already parsed as dict)
+        geometry_geojson = ors_result['GEOMETRY_GEOJSON'].iloc[0]
         
-        ors_geojson = session.sql(ors_geojson_query).to_pandas().iloc[0]['GEOJSON']
-        
-        # Extract coordinates directly from GeoJSON
-        if 'coordinates' in ors_geojson:
-            ors_path = [[lon, lat] for lon, lat in ors_geojson['coordinates']]
+        if 'coordinates' in geometry_geojson:
+            ors_path = [[lon, lat] for lon, lat in geometry_geojson['coordinates']]
             
             layers.append(
                 pdk.Layer(
@@ -356,6 +351,7 @@ view_state = pdk.ViewState(
 r = pdk.Deck(
     layers=layers,
     initial_view_state=view_state,
+    map_style='light',
     tooltip={
         "text": "Speed: {speed} km/h" if segment_paths else None
     }
