@@ -284,9 +284,32 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
             delta_color="inverse"
         )
 
+# Calculate bounds and center for map
+import math
+
+min_lat = min(start_lat, end_lat)
+max_lat = max(start_lat, end_lat)
+min_lon = min(start_lon, end_lon)
+max_lon = max(start_lon, end_lon)
+
+# Add padding
+lat_padding = (max_lat - min_lat) * 0.1
+lon_padding = (max_lon - min_lon) * 0.1
+
 # Calculate center
-center_lat = (start_lat + end_lat) / 2
-center_lon = (start_lon + end_lon) / 2
+center_lat = (min_lat + max_lat) / 2
+center_lon = (min_lon + max_lon) / 2
+
+# Calculate zoom level based on bounds
+lat_diff = max_lat - min_lat + lat_padding
+lon_diff = max_lon - min_lon + lon_padding
+
+# Approximate zoom level (simplified calculation)
+max_diff = max(lat_diff, lon_diff)
+if max_diff > 0:
+    zoom_level = max(1, min(15, 10 - math.log2(max_diff * 100)))
+else:
+    zoom_level = 12
 
 # Prepare segment data for PathLayer with color coding
 segment_paths = []
@@ -365,7 +388,7 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
 view_state = pdk.ViewState(
     latitude=center_lat,
     longitude=center_lon,
-    zoom=12,
+    zoom=zoom_level,
     pitch=0,
 )
 
