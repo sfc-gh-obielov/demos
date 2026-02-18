@@ -35,36 +35,53 @@ trips_df = session.sql(trips_query).to_pandas()
 with st.sidebar:
     st.header("Trip Selection")
     
-    # Filter by country
-    countries = ['All'] + sorted(trips_df['COUNTRY_NAME'].dropna().unique().tolist())
-    selected_country = st.selectbox("Filter by Country", countries, key="country_filter")
-    
-    # Filter by transportation mode
-    modes = ['All'] + sorted(trips_df['TRANSPORTATION_MODE'].dropna().unique().tolist())
-    selected_mode = st.selectbox("Filter by Mode", modes, key="mode_filter")
-    
-    # Apply filters
-    filtered_df = trips_df.copy()
-    if selected_country != 'All':
-        filtered_df = filtered_df[filtered_df['COUNTRY_NAME'] == selected_country]
-    if selected_mode != 'All':
-        filtered_df = filtered_df[filtered_df['TRANSPORTATION_MODE'] == selected_mode]
-    
-    # Trip selector
-    trip_options = filtered_df['TRIP_ID'].tolist()
-    if not trip_options:
-        st.warning("No trips match the selected filters")
-        st.stop()
-    
-    # Show filtered count
-    st.caption(f"Showing {len(trip_options)} trips")
-    
-    selected_trip = st.selectbox(
-        "Select Trip ID",
-        trip_options,
-        format_func=lambda x: f"{x} ({filtered_df[filtered_df['TRIP_ID']==x]['TRANSPORTATION_MODE'].iloc[0]}, {filtered_df[filtered_df['TRIP_ID']==x]['POINTS'].iloc[0]} pts)",
-        index=0  # Always default to first trip in filtered list
+    # Filter by country (required)
+    countries = sorted(trips_df['COUNTRY_NAME'].dropna().unique().tolist())
+    selected_country = st.selectbox(
+        "Filter by Country", 
+        countries, 
+        key="country_filter",
+        index=None,
+        placeholder="Choose a country..."
     )
+    
+    # Filter by transportation mode (required)
+    modes = sorted(trips_df['TRANSPORTATION_MODE'].dropna().unique().tolist())
+    selected_mode = st.selectbox(
+        "Filter by Mode", 
+        modes, 
+        key="mode_filter",
+        index=None,
+        placeholder="Choose a mode..."
+    )
+    
+    # Only show trip selector if both country and mode are selected
+    if selected_country and selected_mode:
+        # Apply filters
+        filtered_df = trips_df[
+            (trips_df['COUNTRY_NAME'] == selected_country) & 
+            (trips_df['TRANSPORTATION_MODE'] == selected_mode)
+        ]
+        
+        # Trip selector
+        trip_options = filtered_df['TRIP_ID'].tolist()
+        
+        if not trip_options:
+            st.warning("No trips match the selected filters")
+            st.stop()
+        
+        # Show filtered count
+        st.caption(f"Found {len(trip_options)} trips")
+        
+        selected_trip = st.selectbox(
+            "Select Trip ID",
+            trip_options,
+            format_func=lambda x: f"{x} ({filtered_df[filtered_df['TRIP_ID']==x]['POINTS'].iloc[0]} pts, {filtered_df[filtered_df['TRIP_ID']==x]['AVG_SPEED'].iloc[0]} km/h)",
+            index=0  # Always default to first trip in filtered list
+        )
+    else:
+        st.info("Please select both country and transportation mode to see available trips")
+        st.stop()
     
     st.divider()
     
