@@ -92,10 +92,10 @@ with st.sidebar:
     
     st.info(f"**Trip Info:**\n- Mode: {trip_info['TRANSPORTATION_MODE']}\n- Points: {trip_info['POINTS']}\n- Avg Speed: {trip_info['AVG_SPEED']} km/h\n- Country: {trip_info['COUNTRY_NAME']}")
 
-# Get actual trip data with geospatial aggregation
+# Get actual trip data with geospatial aggregation and metrics
 uid, tid = selected_trip.split('-')
 
-# Get trip segments with speed-based color coding
+# Get trip segments with speed-based color coding AND trip metrics
 segments_query = f"""
 WITH ordered_points AS (
     SELECT 
@@ -104,6 +104,7 @@ WITH ordered_points AS (
         SPEED,
         GEOMETRY as point,
         EVENT_TIMESTAMP,
+        TIME_LAG,
         ROW_NUMBER() OVER (ORDER BY EVENT_TIMESTAMP) as rn
     FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
     WHERE UID = '{uid}' AND TID = '{tid}'
@@ -125,26 +126,37 @@ segments AS (
             )
         ) as segment_geom,
         (p1.SPEED + p2.SPEED) / 2 as avg_speed,
+        p2.TIME_LAG as segment_duration_seconds,
         p1.rn
     FROM ordered_points p1
     JOIN ordered_points p2 ON p2.rn = p1.rn + 1
+),
+trip_metrics AS (
+    SELECT 
+        SUM(TIME_LAG) as total_duration_seconds
+    FROM ordered_points
+    WHERE TIME_LAG IS NOT NULL
 )
 SELECT 
-    lat1,
-    lon1,
-    lat2,
-    lon2,
-    ST_ASGEOJSON(segment_geom) as segment_geojson,
-    ROUND(avg_speed, 2) as avg_speed,
+    s.lat1,
+    s.lon1,
+    s.lat2,
+    s.lon2,
+    ST_ASGEOJSON(s.segment_geom) as segment_geojson,
+    ROUND(s.avg_speed, 2) as avg_speed,
+    s.segment_duration_seconds,
     -- Color coding based on speed (Red=fast, Yellow=medium, Green=slow)
     CASE 
-        WHEN avg_speed > 60 THEN '[255, 0, 0, 200]'    -- Red for > 60 km/h
-        WHEN avg_speed > 30 THEN '[255, 165, 0, 200]'  -- Orange for 30-60 km/h
-        WHEN avg_speed > 10 THEN '[255, 255, 0, 200]'  -- Yellow for 10-30 km/h
+        WHEN s.avg_speed > 60 THEN '[255, 0, 0, 200]'    -- Red for > 60 km/h
+        WHEN s.avg_speed > 30 THEN '[255, 165, 0, 200]'  -- Orange for 30-60 km/h
+        WHEN s.avg_speed > 10 THEN '[255, 255, 0, 200]'  -- Yellow for 10-30 km/h
         ELSE '[0, 255, 0, 200]'                         -- Green for < 10 km/h
-    END as color
-FROM segments
-ORDER BY rn
+    END as color,
+    tm.total_duration_seconds,
+    ROUND(SUM(s.avg_speed * (s.segment_duration_seconds / 3600.0)) OVER (), 2) as total_distance_km
+FROM segments s
+CROSS JOIN trip_metrics tm
+ORDER BY s.rn
 """
 
 segments_df = session.sql(segments_query).to_pandas()
@@ -159,67 +171,101 @@ start_lon = segments_df.iloc[0]['LON1']
 end_lat = segments_df.iloc[-1]['LAT2']
 end_lon = segments_df.iloc[-1]['LON2']
 
+# Get actual trip metrics (already calculated from summing TIME_LAG)
+actual_duration_seconds = segments_df.iloc[0]['TOTAL_DURATION_SECONDS']
+actual_duration_minutes = round(actual_duration_seconds / 60, 2)
+actual_distance_km = segments_df.iloc[0]['TOTAL_DISTANCE_KM']
+
 st.divider()
+
+st.subheader("📍 Route Details")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📍 Route Details")
-    st.write(f"**Start:** {start_lat:.5f}, {start_lon:.5f}")
-    st.write(f"**End:** {end_lat:.5f}, {end_lon:.5f}")
-    st.write(f"**Total Segments:** {len(segments_df)}")
-    st.write(f"**Avg Speed:** {segments_df['AVG_SPEED'].mean():.2f} km/h")
-    st.write(f"**Max Speed:** {segments_df['AVG_SPEED'].max():.2f} km/h")
+    st.write("**Start Point**")
+    st.write(f"Lat: {start_lat:.5f}, Lon: {start_lon:.5f}")
+    st.write("**End Point**")
+    st.write(f"Lat: {end_lat:.5f}, Lon: {end_lon:.5f}")
 
 with col2:
-    st.subheader("🔄 Calculate ORS Route")
-    if st.button("Calculate OpenRouteService Route", type="primary"):
-        with st.spinner("Calculating route..."):
-            try:
-                # Call ORS DIRECTIONS function
-                ors_query = f"""
-                WITH result AS (
-                    SELECT OPENROUTESERVICE_NATIVE_APP.CORE.DIRECTIONS(
-                        '{ors_profile}',
-                        ARRAY_CONSTRUCT({start_lon}, {start_lat}),
-                        ARRAY_CONSTRUCT({end_lon}, {end_lat})
-                    ) AS response
-                )
-                SELECT 
-                    TO_GEOGRAPHY(response:features[0]:geometry) AS geometry,
-                    ROUND(response:features[0]:properties:summary:distance::NUMBER / 1000, 2) AS distance_km,
-                    ROUND(response:features[0]:properties:summary:duration::NUMBER / 60, 2) AS duration_minutes,
-                    response AS full_payload
-                FROM result
-                """
-                
-                ors_result = session.sql(ors_query).to_pandas()
-                
-                if not ors_result.empty:
-                    st.session_state['ors_result'] = ors_result
-                    st.session_state['ors_calculated'] = True
-                    st.success(f"✅ Route calculated: {ors_result['DISTANCE_KM'].iloc[0]} km, {ors_result['DURATION_MINUTES'].iloc[0]} min")
-                else:
-                    st.error("No route returned from ORS")
-            except Exception as e:
-                st.error(f"Error calculating route: {str(e)}")
-                st.session_state['ors_calculated'] = False
+    st.write("**Actual GPS Trajectory**")
+    st.write(f"Distance: {actual_distance_km} km")
+    st.write(f"Duration: {actual_duration_minutes} min")
+    st.write(f"Segments: {len(segments_df)}")
+
+# Calculate ORS route automatically
+with st.spinner("Calculating OpenRouteService route..."):
+    try:
+        ors_query = f"""
+        WITH result AS (
+            SELECT OPENROUTESERVICE_NATIVE_APP.CORE.DIRECTIONS(
+                '{ors_profile}',
+                ARRAY_CONSTRUCT({start_lon}, {start_lat}),
+                ARRAY_CONSTRUCT({end_lon}, {end_lat})
+            ) AS response
+        )
+        SELECT 
+            TO_GEOGRAPHY(response:features[0]:geometry) AS geometry,
+            ROUND(response:features[0]:properties:summary:distance::NUMBER / 1000, 2) AS distance_km,
+            ROUND(response:features[0]:properties:summary:duration::NUMBER / 60, 2) AS duration_minutes,
+            response AS full_payload
+        FROM result
+        """
+        
+        ors_result = session.sql(ors_query).to_pandas()
+        
+        if not ors_result.empty:
+            st.session_state['ors_result'] = ors_result
+            st.session_state['ors_calculated'] = True
+        else:
+            st.error("No route returned from ORS")
+            st.session_state['ors_calculated'] = False
+    except Exception as e:
+        st.error(f"Error calculating route: {str(e)}")
+        st.session_state['ors_calculated'] = False
 
 st.divider()
 
-# Prepare map data
+# Comparison metrics
 if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
-    st.subheader("📊 Comparison")
+    st.subheader("📊 Route Comparison")
     
     ors_result = st.session_state['ors_result']
+    ors_distance = ors_result['DISTANCE_KM'].iloc[0]
+    ors_duration = ors_result['DURATION_MINUTES'].iloc[0]
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
-        st.metric("ORS Distance", f"{ors_result['DISTANCE_KM'].iloc[0]} km")
+        st.metric(
+            "Actual Distance", 
+            f"{actual_distance_km} km"
+        )
+    
     with col2:
-        st.metric("ORS Duration", f"{ors_result['DURATION_MINUTES'].iloc[0]} min")
+        distance_diff = actual_distance_km - ors_distance
+        st.metric(
+            "ORS Distance", 
+            f"{ors_distance} km",
+            delta=f"{distance_diff:+.2f} km",
+            delta_color="inverse"
+        )
+    
     with col3:
-        st.metric("Actual Segments", len(segments_df))
+        st.metric(
+            "Actual Duration", 
+            f"{actual_duration_minutes} min"
+        )
+    
+    with col4:
+        duration_diff = actual_duration_minutes - ors_duration
+        st.metric(
+            "ORS Duration", 
+            f"{ors_duration} min",
+            delta=f"{duration_diff:+.2f} min",
+            delta_color="inverse"
+        )
 
 # Create map visualization
 st.subheader("🗺️ Map Visualization")
@@ -274,18 +320,16 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
     try:
         ors_geom = st.session_state['ors_result']['GEOMETRY'].iloc[0]
         
-        # Parse ORS geometry and create layer
-        ors_coords_query = f"""
-        SELECT 
-            ST_X(value) AS lon,
-            ST_Y(value) AS lat
-        FROM TABLE(FLATTEN(ST_ASGEOJSON('{ors_geom}')::VARIANT:coordinates))
+        # Get coordinates from GeoJSON
+        ors_geojson_query = f"""
+        SELECT ST_ASGEOJSON('{ors_geom}')::VARIANT as geojson
         """
         
-        ors_coords_df = session.sql(ors_coords_query).to_pandas()
+        ors_geojson = session.sql(ors_geojson_query).to_pandas().iloc[0]['GEOJSON']
         
-        if not ors_coords_df.empty:
-            ors_path = ors_coords_df[['LON', 'LAT']].values.tolist()
+        # Extract coordinates directly from GeoJSON
+        if 'coordinates' in ors_geojson:
+            ors_path = [[lon, lat] for lon, lat in ors_geojson['coordinates']]
             
             layers.append(
                 pdk.Layer(
