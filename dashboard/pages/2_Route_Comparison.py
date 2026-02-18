@@ -319,9 +319,12 @@ layers = [
 if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
     try:
         ors_result = st.session_state['ors_result']
-        
-        # Extract coordinates from geometry_geojson (already parsed as dict)
         geometry_geojson = ors_result['GEOMETRY_GEOJSON'].iloc[0]
+        
+        # Parse if it's a string
+        if isinstance(geometry_geojson, str):
+            import json
+            geometry_geojson = json.loads(geometry_geojson)
         
         if 'coordinates' in geometry_geojson:
             ors_path = [[lon, lat] for lon, lat in geometry_geojson['coordinates']]
