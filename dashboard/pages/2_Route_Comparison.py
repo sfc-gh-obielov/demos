@@ -285,16 +285,14 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
         )
 
 # Calculate bounds and center for map
-import math
-
 min_lat = min(start_lat, end_lat)
 max_lat = max(start_lat, end_lat)
 min_lon = min(start_lon, end_lon)
 max_lon = max(start_lon, end_lon)
 
 # Add padding
-lat_padding = (max_lat - min_lat) * 0.1
-lon_padding = (max_lon - min_lon) * 0.1
+lat_padding = (max_lat - min_lat) * 0.15 or 0.01
+lon_padding = (max_lon - min_lon) * 0.15 or 0.01
 
 # Calculate center
 center_lat = (min_lat + max_lat) / 2
@@ -304,12 +302,22 @@ center_lon = (min_lon + max_lon) / 2
 lat_diff = max_lat - min_lat + lat_padding
 lon_diff = max_lon - min_lon + lon_padding
 
-# Approximate zoom level (simplified calculation)
+# Better zoom calculation
 max_diff = max(lat_diff, lon_diff)
-if max_diff > 0:
-    zoom_level = max(1, min(15, 10 - math.log2(max_diff * 100)))
-else:
+if max_diff < 0.01:
+    zoom_level = 14
+elif max_diff < 0.05:
     zoom_level = 12
+elif max_diff < 0.1:
+    zoom_level = 11
+elif max_diff < 0.5:
+    zoom_level = 10
+elif max_diff < 1.0:
+    zoom_level = 9
+elif max_diff < 2.0:
+    zoom_level = 8
+else:
+    zoom_level = 7
 
 # Prepare segment data for PathLayer with color coding
 segment_paths = []
