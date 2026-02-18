@@ -92,30 +92,75 @@ with st.sidebar:
     
     st.info(f"**Trip Info:**\n- Mode: {trip_info['TRANSPORTATION_MODE']}\n- Points: {trip_info['POINTS']}\n- Avg Speed: {trip_info['AVG_SPEED']} km/h\n- Country: {trip_info['COUNTRY_NAME']}")
 
-# Get actual trip data
+# Get actual trip data with geospatial aggregation
 uid, tid = selected_trip.split('-')
-actual_route_query = f"""
+
+# Get trip segments with speed-based color coding
+segments_query = f"""
+WITH ordered_points AS (
+    SELECT 
+        LATITUDE,
+        LONGITUDE,
+        SPEED,
+        ST_MAKEPOINT(LONGITUDE, LATITUDE) as point,
+        TIMESTAMP_LOCAL,
+        ROW_NUMBER() OVER (ORDER BY TIMESTAMP_LOCAL) as rn
+    FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
+    WHERE UID = '{uid}' AND TID = '{tid}'
+    ORDER BY TIMESTAMP_LOCAL
+),
+segments AS (
+    SELECT 
+        p1.LATITUDE as lat1,
+        p1.LONGITUDE as lon1,
+        p2.LATITUDE as lat2,
+        p2.LONGITUDE as lon2,
+        ST_MAKELINE(p1.point, p2.point) as segment_geom,
+        (p1.SPEED + p2.SPEED) / 2 as avg_speed,
+        p1.rn
+    FROM ordered_points p1
+    JOIN ordered_points p2 ON p2.rn = p1.rn + 1
+)
 SELECT 
-    LATITUDE,
-    LONGITUDE,
-    TIMESTAMP_LOCAL,
-    SPEED
+    lat1,
+    lon1,
+    lat2,
+    lon2,
+    ST_ASGEOJSON(segment_geom) as segment_geojson,
+    ROUND(avg_speed, 2) as avg_speed,
+    -- Color coding based on speed (Red=fast, Yellow=medium, Green=slow)
+    CASE 
+        WHEN avg_speed > 60 THEN '[255, 0, 0, 200]'    -- Red for > 60 km/h
+        WHEN avg_speed > 30 THEN '[255, 165, 0, 200]'  -- Orange for 30-60 km/h
+        WHEN avg_speed > 10 THEN '[255, 255, 0, 200]'  -- Yellow for 10-30 km/h
+        ELSE '[0, 255, 0, 200]'                         -- Green for < 10 km/h
+    END as color
+FROM segments
+ORDER BY rn
+"""
+
+segments_df = session.sql(segments_query).to_pandas()
+
+if segments_df.empty:
+    st.error("No data found for selected trip")
+    st.stop()
+
+# Get start and end points
+start_lat = segments_df.iloc[0]['LAT1']
+start_lon = segments_df.iloc[0]['LON1']
+end_lat = segments_df.iloc[-1]['LAT2']
+end_lon = segments_df.iloc[-1]['LON2']
+
+# Get overall trip geometry
+trip_geom_query = f"""
+SELECT 
+    ST_MAKELINE(ST_MAKEPOINT(LONGITUDE, LATITUDE)) as trip_line
 FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
 WHERE UID = '{uid}' AND TID = '{tid}'
 ORDER BY TIMESTAMP_LOCAL
 """
 
-actual_route_df = session.sql(actual_route_query).to_pandas()
-
-if actual_route_df.empty:
-    st.error("No data found for selected trip")
-    st.stop()
-
-# Get start and end points
-start_lat = actual_route_df.iloc[0]['LATITUDE']
-start_lon = actual_route_df.iloc[0]['LONGITUDE']
-end_lat = actual_route_df.iloc[-1]['LATITUDE']
-end_lon = actual_route_df.iloc[-1]['LONGITUDE']
+trip_geom_df = session.sql(trip_geom_query).to_pandas()
 
 st.divider()
 
@@ -125,7 +170,9 @@ with col1:
     st.subheader("📍 Route Details")
     st.write(f"**Start:** {start_lat:.5f}, {start_lon:.5f}")
     st.write(f"**End:** {end_lat:.5f}, {end_lon:.5f}")
-    st.write(f"**Total Points:** {len(actual_route_df)}")
+    st.write(f"**Total Segments:** {len(segments_df)}")
+    st.write(f"**Avg Speed:** {segments_df['AVG_SPEED'].mean():.2f} km/h")
+    st.write(f"**Max Speed:** {segments_df['AVG_SPEED'].max():.2f} km/h")
 
 with col2:
     st.subheader("🔄 Calculate ORS Route")
@@ -175,54 +222,52 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
     with col2:
         st.metric("ORS Duration", f"{ors_result['DURATION_MINUTES'].iloc[0]} min")
     with col3:
-        actual_distance = actual_route_df['SPEED'].sum() * 0.01  # Rough estimate
-        st.metric("Actual Points", len(actual_route_df))
+        st.metric("Actual Segments", len(segments_df))
 
 # Create map visualization
 st.subheader("🗺️ Map Visualization")
 
-# Prepare actual route as line
-actual_route_coords = actual_route_df[['LONGITUDE', 'LATITUDE']].values.tolist()
-
 # Calculate center
-center_lat = actual_route_df['LATITUDE'].mean()
-center_lon = actual_route_df['LONGITUDE'].mean()
+center_lat = (start_lat + end_lat) / 2
+center_lon = (start_lon + end_lon) / 2
+
+# Prepare segment data for PathLayer with color coding
+segment_paths = []
+for _, row in segments_df.iterrows():
+    segment_paths.append({
+        "path": [[row['LON1'], row['LAT1']], [row['LON2'], row['LAT2']]],
+        "color": eval(row['COLOR']),  # Convert string representation to list
+        "speed": row['AVG_SPEED']
+    })
 
 # Create layers
 layers = [
-    pdk.Layer(
-        "ScatterplotLayer",
-        data=actual_route_df,
-        get_position='[LONGITUDE, LATITUDE]',
-        get_color='[0, 0, 255, 160]',
-        get_radius=20,
-        pickable=True,
-    ),
+    # Speed-colored segments for actual route
     pdk.Layer(
         "PathLayer",
-        data=[{"path": actual_route_coords}],
+        data=segment_paths,
         get_path="path",
-        get_color=[0, 0, 255, 180],
-        get_width=3,
-        width_min_pixels=2,
-        pickable=False,
+        get_color="color",
+        get_width=5,
+        width_min_pixels=3,
+        pickable=True,
     ),
     # Start marker
     pdk.Layer(
         "ScatterplotLayer",
-        data=[{"lon": start_lon, "lat": start_lat}],
+        data=[{"lon": start_lon, "lat": start_lat, "label": "Start"}],
         get_position='[lon, lat]',
-        get_color='[0, 255, 0, 200]',
-        get_radius=50,
+        get_color='[0, 255, 0, 255]',
+        get_radius=80,
         pickable=True,
     ),
     # End marker
     pdk.Layer(
         "ScatterplotLayer",
-        data=[{"lon": end_lon, "lat": end_lat}],
+        data=[{"lon": end_lon, "lat": end_lat, "label": "End"}],
         get_position='[lon, lat]',
-        get_color='[255, 0, 0, 200]',
-        get_radius=50,
+        get_color='[255, 0, 0, 255]',
+        get_radius=80,
         pickable=True,
     ),
 ]
@@ -250,9 +295,9 @@ if 'ors_calculated' in st.session_state and st.session_state['ors_calculated']:
                     "PathLayer",
                     data=[{"path": ors_path}],
                     get_path="path",
-                    get_color=[255, 165, 0, 200],
-                    get_width=5,
-                    width_min_pixels=3,
+                    get_color=[0, 100, 255, 220],  # Blue for ORS route
+                    get_width=4,
+                    width_min_pixels=2,
                     pickable=True,
                 )
             )
@@ -271,7 +316,7 @@ r = pdk.Deck(
     layers=layers,
     initial_view_state=view_state,
     tooltip={
-        "text": "Lat: {LATITUDE}\nLon: {LONGITUDE}\nSpeed: {SPEED} km/h"
+        "text": "Speed: {speed} km/h" if segment_paths else None
     }
 )
 
@@ -280,8 +325,12 @@ st.pydeck_chart(r)
 # Legend
 st.markdown("""
 **Legend:**
-- 🔵 **Blue Line/Points**: Actual GPS trajectory
-- 🟠 **Orange Line**: OpenRouteService calculated route
+- **Speed Color Coding** (Actual GPS trajectory):
+  - 🔴 **Red**: > 60 km/h (fast)
+  - 🟠 **Orange**: 30-60 km/h (medium)
+  - 🟡 **Yellow**: 10-30 km/h (slow)
+  - 🟢 **Green**: < 10 km/h (very slow)
+- 🔵 **Blue Line**: OpenRouteService calculated route
 - 🟢 **Green Marker**: Trip start point
 - 🔴 **Red Marker**: Trip end point
 """)
