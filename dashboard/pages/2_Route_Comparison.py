@@ -115,7 +115,15 @@ segments AS (
         p1.LNG as lon1,
         p2.LAT as lat2,
         p2.LNG as lon2,
-        ST_MAKELINE(p1.point, p2.point) as segment_geom,
+        TO_GEOGRAPHY(
+            OBJECT_CONSTRUCT(
+                'type', 'LineString',
+                'coordinates', ARRAY_CONSTRUCT(
+                    ARRAY_CONSTRUCT(p1.LNG, p1.LAT),
+                    ARRAY_CONSTRUCT(p2.LNG, p2.LAT)
+                )
+            )
+        ) as segment_geom,
         (p1.SPEED + p2.SPEED) / 2 as avg_speed,
         p1.rn
     FROM ordered_points p1
@@ -150,17 +158,6 @@ start_lat = segments_df.iloc[0]['LAT1']
 start_lon = segments_df.iloc[0]['LON1']
 end_lat = segments_df.iloc[-1]['LAT2']
 end_lon = segments_df.iloc[-1]['LON2']
-
-# Get overall trip geometry using ST_MAKELINE aggregate
-trip_geom_query = f"""
-SELECT 
-    ST_MAKELINE(GEOMETRY) as trip_line
-FROM FLEET_DEMOS.ROUTING.GEOLIFE_CLEAN
-WHERE UID = '{uid}' AND TID = '{tid}'
-ORDER BY EVENT_TIMESTAMP
-"""
-
-trip_geom_df = session.sql(trip_geom_query).to_pandas()
 
 st.divider()
 
