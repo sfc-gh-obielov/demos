@@ -275,7 +275,7 @@ deck = pdk.Deck(
     layers=[h3_layer],
     initial_view_state=view_state,
     tooltip=tooltip,
-    map_style='mapbox://styles/mapbox/light-v10'
+    map_style='light'
 )
 
 st.pydeck_chart(deck, use_container_width=True)
