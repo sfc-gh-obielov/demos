@@ -218,9 +218,9 @@ st.dataframe(
 st.subheader("🗺️ Interactive Map")
 
 # Prepare data for PyDeck
-map_data = travel_times_df[['DEST_HEX_ID', 'DURATION_MINUTES', 'DISTANCE_KM', 'RING', 'COLOR', 'DEST_LAT', 'DEST_LON']].copy()
+map_data = travel_times_df[['DEST_HEX', 'DURATION_MINUTES', 'DISTANCE_KM', 'RING', 'COLOR', 'DEST_LAT', 'DEST_LON']].copy()
 map_data = map_data.rename(columns={
-    'DEST_HEX_ID': 'hex',
+    'DEST_HEX': 'hex',
     'DURATION_MINUTES': 'time',
     'DISTANCE_KM': 'distance',
     'RING': 'ring'
@@ -282,8 +282,8 @@ st.pydeck_chart(deck, use_container_width=True)
 
 # Detailed data table
 with st.expander("📋 View Detailed Data"):
-    detailed_data = travel_times_df[travel_times_df['DEST_HEX_ID'] != selected_hex][
-        ['DEST_HEX_ID', 'RING', 'DURATION_MINUTES', 'DISTANCE_KM', 'DEST_LAT', 'DEST_LON']
+    detailed_data = travel_times_df[travel_times_df['DEST_HEX'] != selected_hex][
+        ['DEST_HEX', 'RING', 'DURATION_MINUTES', 'DISTANCE_KM', 'DEST_LAT', 'DEST_LON']
     ].copy()
     detailed_data = detailed_data.sort_values(['RING', 'DURATION_MINUTES'])
     detailed_data.columns = ['Destination Hex', 'Ring', 'Time (min)', 'Distance (km)', 'Latitude', 'Longitude']
