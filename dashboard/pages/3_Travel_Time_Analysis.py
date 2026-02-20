@@ -121,17 +121,21 @@ def get_travel_times(origin_hex, neighbor_hexes):
     
     query = f"""
     SELECT 
-        ORIGIN_HEX_ID,
-        DEST_HEX_ID,
-        DISTANCE_KM,
-        DURATION_MINUTES,
-        ORIGIN_LAT,
-        ORIGIN_LON,
-        DEST_LAT,
-        DEST_LON
-    FROM FLEET_DEMOS.ROUTING.SF_TRAVEL_TIME_MATRIX
-    WHERE ORIGIN_HEX_ID = '{origin_hex}'
-        AND DEST_HEX_ID IN ({hex_list})
+        m.ORIGIN_HEX,
+        m.DEST_HEX,
+        m.DISTANCE_KM,
+        m.DURATION_MINUTES,
+        h_origin.LATITUDE AS ORIGIN_LAT,
+        h_origin.LONGITUDE AS ORIGIN_LON,
+        h_dest.LATITUDE AS DEST_LAT,
+        h_dest.LONGITUDE AS DEST_LON
+    FROM FLEET_DEMOS.ROUTING.SF_TRAVEL_TIME_MATRIX m
+    JOIN FLEET_DEMOS.ROUTING.SF_HEXAGONS h_origin 
+        ON m.ORIGIN_HEX = h_origin.HEX_ID
+    JOIN FLEET_DEMOS.ROUTING.SF_HEXAGONS h_dest 
+        ON m.DEST_HEX = h_dest.HEX_ID
+    WHERE m.ORIGIN_HEX = '{origin_hex}'
+        AND m.DEST_HEX IN ({hex_list})
     """
     
     df = session.sql(query).to_pandas()
@@ -143,8 +147,8 @@ with st.spinner("Loading travel times..."):
 
 # Add origin hexagon itself with 0 travel time
 origin_row = hexagons_df[hexagons_df['HEX_ID'] == selected_hex].copy()
-origin_row['ORIGIN_HEX_ID'] = selected_hex
-origin_row['DEST_HEX_ID'] = selected_hex
+origin_row['ORIGIN_HEX'] = selected_hex
+origin_row['DEST_HEX'] = selected_hex
 origin_row['DISTANCE_KM'] = 0.0
 origin_row['DURATION_MINUTES'] = 0.0
 origin_row['ORIGIN_LAT'] = origin_row['LATITUDE']
@@ -152,10 +156,10 @@ origin_row['ORIGIN_LON'] = origin_row['LONGITUDE']
 origin_row['DEST_LAT'] = origin_row['LATITUDE']
 origin_row['DEST_LON'] = origin_row['LONGITUDE']
 
-travel_times_df = pd.concat([travel_times_df, origin_row[['ORIGIN_HEX_ID', 'DEST_HEX_ID', 'DISTANCE_KM', 'DURATION_MINUTES', 'ORIGIN_LAT', 'ORIGIN_LON', 'DEST_LAT', 'DEST_LON']]], ignore_index=True)
+travel_times_df = pd.concat([travel_times_df, origin_row[['ORIGIN_HEX', 'DEST_HEX', 'DISTANCE_KM', 'DURATION_MINUTES', 'ORIGIN_LAT', 'ORIGIN_LON', 'DEST_LAT', 'DEST_LON']]], ignore_index=True)
 
 # Add ring information to dataframe
-travel_times_df['RING'] = travel_times_df['DEST_HEX_ID'].map(hex_to_ring)
+travel_times_df['RING'] = travel_times_df['DEST_HEX'].map(hex_to_ring)
 
 # Add color based on travel time
 travel_times_df['COLOR'] = travel_times_df['DURATION_MINUTES'].apply(get_color_for_time)
@@ -172,21 +176,21 @@ with col1:
     )
 
 with col2:
-    avg_time = travel_times_df[travel_times_df['DEST_HEX_ID'] != selected_hex]['DURATION_MINUTES'].mean()
+    avg_time = travel_times_df[travel_times_df['DEST_HEX'] != selected_hex]['DURATION_MINUTES'].mean()
     st.metric(
         "Avg Travel Time",
         f"{avg_time:.1f} min"
     )
 
 with col3:
-    max_time = travel_times_df[travel_times_df['DEST_HEX_ID'] != selected_hex]['DURATION_MINUTES'].max()
+    max_time = travel_times_df[travel_times_df['DEST_HEX'] != selected_hex]['DURATION_MINUTES'].max()
     st.metric(
         "Max Travel Time",
         f"{max_time:.1f} min"
     )
 
 with col4:
-    avg_dist = travel_times_df[travel_times_df['DEST_HEX_ID'] != selected_hex]['DISTANCE_KM'].mean()
+    avg_dist = travel_times_df[travel_times_df['DEST_HEX'] != selected_hex]['DISTANCE_KM'].mean()
     st.metric(
         "Avg Distance",
         f"{avg_dist:.1f} km"
@@ -195,7 +199,7 @@ with col4:
 # Statistics by ring
 st.subheader("📈 Travel Time by Ring")
 
-ring_stats = travel_times_df[travel_times_df['DEST_HEX_ID'] != selected_hex].groupby('RING').agg({
+ring_stats = travel_times_df[travel_times_df['DEST_HEX'] != selected_hex].groupby('RING').agg({
     'DURATION_MINUTES': ['min', 'mean', 'max', 'count'],
     'DISTANCE_KM': 'mean'
 }).round(1)
