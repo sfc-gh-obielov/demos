@@ -66,8 +66,8 @@ def get_available_hexagons():
     query = """
     SELECT 
         HEX_ID,
-        LAT,
-        LON
+        LATITUDE,
+        LONGITUDE
     FROM FLEET_DEMOS.ROUTING.SF_HEXAGONS
     ORDER BY HEX_ID
     """
@@ -147,10 +147,10 @@ origin_row['ORIGIN_HEX_ID'] = selected_hex
 origin_row['DEST_HEX_ID'] = selected_hex
 origin_row['DISTANCE_KM'] = 0.0
 origin_row['DURATION_MINUTES'] = 0.0
-origin_row['ORIGIN_LAT'] = origin_row['LAT']
-origin_row['ORIGIN_LON'] = origin_row['LON']
-origin_row['DEST_LAT'] = origin_row['LAT']
-origin_row['DEST_LON'] = origin_row['LON']
+origin_row['ORIGIN_LAT'] = origin_row['LATITUDE']
+origin_row['ORIGIN_LON'] = origin_row['LONGITUDE']
+origin_row['DEST_LAT'] = origin_row['LATITUDE']
+origin_row['DEST_LON'] = origin_row['LONGITUDE']
 
 travel_times_df = pd.concat([travel_times_df, origin_row[['ORIGIN_HEX_ID', 'DEST_HEX_ID', 'DISTANCE_KM', 'DURATION_MINUTES', 'ORIGIN_LAT', 'ORIGIN_LON', 'DEST_LAT', 'DEST_LON']]], ignore_index=True)
 
@@ -239,8 +239,8 @@ h3_layer = pdk.Layer(
 )
 
 # Get center coordinates
-center_lat = origin_row['LAT'].iloc[0]
-center_lon = origin_row['LON'].iloc[0]
+center_lat = origin_row['LATITUDE'].iloc[0]
+center_lon = origin_row['LONGITUDE'].iloc[0]
 
 # Create view state
 view_state = pdk.ViewState(
