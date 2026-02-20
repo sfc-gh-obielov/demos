@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 from snowflake.snowpark.context import get_active_session
-import h3
 
 st.set_page_config(
     page_title="Travel Time Analysis - Fleet Analytics",
@@ -36,24 +35,29 @@ def get_color_for_time(minutes):
         # Red (slow)
         return [220, 20, 60, 200]
 
-# Helper function to calculate k-ring neighbors
+# Helper function to calculate k-ring neighbors using Snowflake H3 functions
 @st.cache_data
 def get_k_ring_neighbors(hex_id, k):
-    """Get all hexagons within k rings of the center hexagon"""
-    neighbors = h3.k_ring(hex_id, k)
+    """Get all hexagons within k rings using Snowflake's H3_GRID_DISK function"""
+    query = f"""
+    WITH grid_disk AS (
+        SELECT 
+            VALUE::STRING AS neighbor_hex,
+            H3_GRID_DISTANCE('{hex_id}', VALUE::STRING) AS ring_number
+        FROM TABLE(FLATTEN(H3_GRID_DISK('{hex_id}', {k})))
+    )
+    SELECT 
+        neighbor_hex,
+        ring_number
+    FROM grid_disk
+    ORDER BY ring_number, neighbor_hex
+    """
     
-    # Create a mapping of hexagon to ring number
-    hex_to_ring = {}
-    for ring_num in range(k + 1):
-        ring_hexes = h3.k_ring(hex_id, ring_num)
-        if ring_num > 0:
-            # Exclude inner rings to get only this ring
-            inner_ring = h3.k_ring(hex_id, ring_num - 1)
-            ring_hexes = ring_hexes - inner_ring
-        for h in ring_hexes:
-            hex_to_ring[h] = ring_num
+    df = session.sql(query).to_pandas()
+    neighbors = df['NEIGHBOR_HEX'].tolist()
+    hex_to_ring = dict(zip(df['NEIGHBOR_HEX'], df['RING_NUMBER']))
     
-    return list(neighbors), hex_to_ring
+    return neighbors, hex_to_ring
 
 # Query available hexagons
 @st.cache_data
