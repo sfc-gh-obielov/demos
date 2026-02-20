@@ -16,24 +16,31 @@ st.markdown("Explore e-bike travel times from any hexagon to its nearest neighbo
 
 # Helper function to get color based on travel time
 def get_color_for_time(minutes):
-    """Return RGB color based on travel time in minutes"""
+    """Return RGB color based on travel time in 3-minute intervals"""
     if minutes is None or pd.isna(minutes):
         return [128, 128, 128, 180]  # Gray for no data
-    elif minutes < 10:
-        # Green (fast)
-        return [34, 139, 34, 200]
-    elif minutes < 20:
-        # Yellow-green
-        return [154, 205, 50, 200]
-    elif minutes < 30:
-        # Orange
-        return [255, 165, 0, 200]
-    elif minutes < 40:
-        # Orange-red
-        return [255, 69, 0, 200]
-    else:
-        # Red (slow)
-        return [220, 20, 60, 200]
+    
+    # Define color stops for smooth gradient (green -> yellow -> orange -> red)
+    # Each color is [R, G, B, A]
+    color_stops = [
+        (0, [34, 139, 34, 200]),      # 0-3 min: Dark green
+        (3, [50, 205, 50, 200]),      # 3-6 min: Lime green
+        (6, [154, 205, 50, 200]),     # 6-9 min: Yellow-green
+        (9, [255, 255, 0, 200]),      # 9-12 min: Yellow
+        (12, [255, 215, 0, 200]),     # 12-15 min: Gold
+        (15, [255, 165, 0, 200]),     # 15-18 min: Orange
+        (18, [255, 69, 0, 200]),      # 18-21 min: Orange-red
+        (21, [220, 20, 60, 200]),     # 21-24 min: Crimson
+        (24, [178, 34, 34, 200]),     # 24+ min: Dark red
+    ]
+    
+    # Find the appropriate color based on 3-minute intervals
+    for i, (threshold, color) in enumerate(color_stops):
+        if minutes < threshold + 3:
+            return color
+    
+    # For times > 24 min, use darkest red
+    return color_stops[-1][1]
 
 # Helper function to calculate k-ring neighbors using Snowflake H3 functions
 @st.cache_data
@@ -92,20 +99,24 @@ selected_hex = st.sidebar.selectbox(
 k_rings = st.sidebar.slider(
     "Number of Neighbor Rings",
     min_value=1,
-    max_value=10,
+    max_value=50,
     value=10,
-    help="Number of hexagon rings to visualize (Ring 1 = 6 neighbors, Ring 2 = 12 more, etc.)"
+    help="Number of hexagon rings to visualize (Ring 1 = 6 neighbors, Ring 10 = ~331 hexagons, Ring 50 = ~7,651 hexagons)"
 )
 
 st.sidebar.divider()
 
 # Color legend
 st.sidebar.markdown("### Travel Time Legend")
-st.sidebar.markdown("🟢 **< 10 min** - Very close")
-st.sidebar.markdown("🟡 **10-20 min** - Close")
-st.sidebar.markdown("🟠 **20-30 min** - Medium")
-st.sidebar.markdown("🔴 **30-40 min** - Far")
-st.sidebar.markdown("🔴 **> 40 min** - Very far")
+st.sidebar.markdown("🟢 **0-3 min** - Very close")
+st.sidebar.markdown("🟢 **3-6 min** - Close")
+st.sidebar.markdown("🟡 **6-9 min** - Nearby")
+st.sidebar.markdown("🟡 **9-12 min** - Moderate")
+st.sidebar.markdown("🟠 **12-15 min** - Medium")
+st.sidebar.markdown("🟠 **15-18 min** - Medium-far")
+st.sidebar.markdown("🔴 **18-21 min** - Far")
+st.sidebar.markdown("🔴 **21-24 min** - Very far")
+st.sidebar.markdown("🔴 **24+ min** - Distant")
 
 # Get k-ring neighbors
 neighbors, hex_to_ring = get_k_ring_neighbors(selected_hex, k_rings)
