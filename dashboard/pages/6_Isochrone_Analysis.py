@@ -159,33 +159,45 @@ try:
     with st.spinner(f"Generating isochrones for {location_name}..."):
         time_intervals_seconds = [int(t * 3600) for t in time_intervals]
         
-        query = f"""
-        WITH isochrone_data AS (
+        queries = []
+        for i, time_sec in enumerate(time_intervals_seconds):
+            queries.append(f"""
             SELECT 
+                {time_sec} as time_seconds,
                 OPENROUTESERVICE_NATIVE_APP.CORE.ISOCHRONES(
                     '{profile}',
-                    ARRAY_CONSTRUCT({origin_lon}, {origin_lat}),
-                    ARRAY_CONSTRUCT({', '.join(map(str, time_intervals_seconds))})
+                    {origin_lon},
+                    {origin_lat},
+                    {time_sec}
                 ) as isochrone_result
-        )
-        SELECT 
-            isochrone_result
-        FROM isochrone_data
-        """
+            """)
         
-        result = session.sql(query).collect()
+        combined_query = " UNION ALL ".join(queries)
         
-        if not result or not result[0]['ISOCHRONE_RESULT']:
+        result = session.sql(combined_query).collect()
+        
+        if not result:
             st.error("❌ Failed to generate isochrones")
             st.info("Make sure OpenRouteService is running and has data for the selected region")
             st.stop()
         
-        isochrone_geojson = result[0]['ISOCHRONE_RESULT']
+        all_features = []
+        for row in result:
+            isochrone_geojson = row['ISOCHRONE_RESULT']
+            
+            if isinstance(isochrone_geojson, str):
+                iso_data = json.loads(isochrone_geojson)
+            else:
+                iso_data = isochrone_geojson
+            
+            features = iso_data.get('features', [])
+            for feature in features:
+                all_features.append(feature)
         
-        if isinstance(isochrone_geojson, str):
-            isochrone_data = json.loads(isochrone_geojson)
-        else:
-            isochrone_data = isochrone_geojson
+        isochrone_data = {
+            'type': 'FeatureCollection',
+            'features': all_features
+        }
     
     st.success(f"✅ Generated {len(time_intervals)} isochrones for {location_name}")
     
@@ -328,22 +340,25 @@ try:
         st.json(isochrone_data)
     
     with st.expander("🔍 Technical Details"):
+        api_calls = "\n".join([
+            f"-- {t} hour isochrone\nOPENROUTESERVICE_NATIVE_APP.CORE.ISOCHRONES('{profile}', {origin_lon}, {origin_lat}, {int(t * 3600)})"
+            for t in time_intervals
+        ])
+        
         st.markdown(f"""
         **Query Parameters:**
         - **Origin Coordinates:** `{origin_lon:.4f}, {origin_lat:.4f}`
         - **Profile:** `{profile}`
-        - **Time Intervals (seconds):** `{time_intervals_seconds}`
+        - **Time Intervals:** `{', '.join([f'{t}h' for t in time_intervals])}`
         - **Color Scheme:** `{color_scheme}`
         - **Opacity:** `{opacity}`
         
-        **API Call:**
+        **API Calls:**
         ```sql
-        OPENROUTESERVICE_NATIVE_APP.CORE.ISOCHRONES(
-            '{profile}',
-            ARRAY_CONSTRUCT({origin_lon}, {origin_lat}),
-            ARRAY_CONSTRUCT({', '.join(map(str, time_intervals_seconds))})
-        )
+{api_calls}
         ```
+        
+        **Note:** Each time interval requires a separate API call. Results are combined into a single visualization.
         """)
 
 except Exception as e:
