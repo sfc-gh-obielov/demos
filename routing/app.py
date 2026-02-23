@@ -201,6 +201,44 @@ def get_service_logs(service_name, num_lines=100):
     except Exception as e:
         return f"Error fetching logs: {e}"
 
+def start_all_services():
+    """Start all four services"""
+    services = ['ORS_SERVICE', 'ROUTING_GATEWAY_SERVICE', 'VROOM_SERVICE', 'DOWNLOADER']
+    
+    with st.spinner("▶️ Starting all services..."):
+        try:
+            for service_name in services:
+                st.info(f"Starting {service_name}...")
+                session.sql(f"""
+                    ALTER SERVICE OPENROUTESERVICE_NATIVE_APP.CORE.{service_name} RESUME
+                """).collect()
+                time.sleep(1)
+            
+            st.success("✅ All services started successfully!")
+            time.sleep(2)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error starting services: {e}")
+
+def stop_all_services():
+    """Stop all four services"""
+    services = ['ORS_SERVICE', 'ROUTING_GATEWAY_SERVICE', 'VROOM_SERVICE', 'DOWNLOADER']
+    
+    with st.spinner("⏸️ Stopping all services..."):
+        try:
+            for service_name in services:
+                st.info(f"Stopping {service_name}...")
+                session.sql(f"""
+                    ALTER SERVICE OPENROUTESERVICE_NATIVE_APP.CORE.{service_name} SUSPEND
+                """).collect()
+                time.sleep(1)
+            
+            st.success("🛑 All services stopped successfully!")
+            time.sleep(2)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error stopping services: {e}")
+
 def get_active_profile_from_logs():
     """Determine active profile from actual service specification (ground truth)"""
     try:
@@ -352,6 +390,17 @@ col1, col2 = st.columns([2, 1])
 
 with col2:
     st.subheader("⚙️ Services Status")
+    
+    # Control buttons for all services
+    ctrl_col1, ctrl_col2 = st.columns(2)
+    with ctrl_col1:
+        if st.button("▶️ Start All", use_container_width=True, type="primary"):
+            start_all_services()
+    with ctrl_col2:
+        if st.button("⏸️ Stop All", use_container_width=True):
+            stop_all_services()
+    
+    st.markdown("---")
     
     all_services = get_all_services_status()
     ors_init_status = get_ors_initialization_status()
