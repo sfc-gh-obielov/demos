@@ -153,12 +153,53 @@ def get_all_services_status():
         for row in result:
             services[row['name']] = {
                 'status': row['status'],
-                'instances': f"{row['current_instances']}/{row['target_instances']}"
+                'instances': f"{row['current_instances']}/{row['target_instances']}",
+                'compute_pool': row['compute_pool'],
+                'created_on': row['created_on']
             }
         return services
     except Exception as e:
         st.error(f"Error fetching services: {e}")
         return {}
+
+def start_service(service_name):
+    """Start/Resume a service"""
+    try:
+        with st.spinner(f"Starting {service_name}..."):
+            session.sql(f"""
+                ALTER SERVICE OPENROUTESERVICE_NATIVE_APP.CORE.{service_name} RESUME
+            """).collect()
+            time.sleep(2)
+            st.success(f"✅ Started {service_name}")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Error starting {service_name}: {e}")
+
+def stop_service(service_name):
+    """Stop/Suspend a service"""
+    try:
+        with st.spinner(f"Stopping {service_name}..."):
+            session.sql(f"""
+                ALTER SERVICE OPENROUTESERVICE_NATIVE_APP.CORE.{service_name} SUSPEND
+            """).collect()
+            time.sleep(2)
+            st.success(f"🛑 Stopped {service_name}")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Error stopping {service_name}: {e}")
+
+def get_service_logs(service_name, num_lines=100):
+    """Get logs for a specific service"""
+    try:
+        result = session.sql(f"""
+            CALL SYSTEM$GET_SERVICE_LOGS('OPENROUTESERVICE_NATIVE_APP.CORE.{service_name}', 0, '{service_name.lower().split('_')[0]}', {num_lines})
+        """).collect()
+        
+        if result and result[0]:
+            return str(result[0][0])
+        return "No logs available"
+    except Exception as e:
+        return f"Error fetching logs: {e}"
 
 def get_active_profile_from_logs():
     """Determine active profile from actual service specification (ground truth)"""
@@ -292,7 +333,7 @@ $$
             get_profile_details.clear()
             
             time.sleep(2)
-            st.experimental_rerun()
+            st.rerun()
             
         except Exception as e:
             st.error(f"❌ Error switching profile: {e}")
@@ -348,15 +389,32 @@ with col2:
                 status = service['status']
                 instances = service['instances']
                 
-                col_name, col_status = st.columns([2, 1])
-                with col_name:
-                    st.write(f"**{service_name.replace('_', ' ').title()}**")
-                    st.caption(f"Instances: {instances}")
-                with col_status:
-                    st.write(f"{status_emoji.get(status, '⚪')} {status}")
-                
-                if service_name != 'DOWNLOADER':
-                    st.markdown("")
+                with st.container():
+                    col_name, col_status, col_actions = st.columns([2, 1, 1])
+                    
+                    with col_name:
+                        st.write(f"**{service_name.replace('_', ' ').title()}**")
+                        st.caption(f"Instances: {instances}")
+                    
+                    with col_status:
+                        st.write(f"{status_emoji.get(status, '⚪')} {status}")
+                    
+                    with col_actions:
+                        if status in ['RUNNING', 'READY']:
+                            if st.button("⏸️", key=f"stop_{service_name}", help="Stop service", use_container_width=True):
+                                stop_service(service_name)
+                        else:
+                            if st.button("▶️", key=f"start_{service_name}", help="Start service", use_container_width=True):
+                                start_service(service_name)
+                    
+                    with st.expander(f"📋 View {service_name.replace('_', ' ').title()} Logs"):
+                        if st.button("🔄 Refresh Logs", key=f"refresh_logs_{service_name}"):
+                            st.rerun()
+                        logs = get_service_logs(service_name)
+                        st.code(logs, language="log")
+                    
+                    if service_name != 'DOWNLOADER':
+                        st.markdown("")
     else:
         service_status = get_service_status()
         st.metric(
