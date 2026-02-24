@@ -64,22 +64,24 @@ opacity = st.sidebar.slider(
 st.sidebar.divider()
 
 map_style_options = {
-    "Streets (Detailed)": "mapbox://styles/mapbox/streets-v12",
-    "Light": "mapbox://styles/mapbox/light-v11",
-    "Dark": "mapbox://styles/mapbox/dark-v11",
-    "Outdoors": "mapbox://styles/mapbox/outdoors-v12",
-    "Satellite": "mapbox://styles/mapbox/satellite-v9",
-    "Satellite Streets": "mapbox://styles/mapbox/satellite-streets-v12"
+    "Road": "road",
+    "Light": "light",
+    "Dark": "dark",
+    "Satellite": "satellite",
+    "Light (No Labels)": "light_no_labels",
+    "Dark (No Labels)": "dark_no_labels"
 }
 
 selected_style_name = st.sidebar.selectbox(
     "Map Style",
     options=list(map_style_options.keys()),
     index=0,
-    help="Choose the basemap style - Streets shows building names and detailed labels"
+    help="Choose the basemap style - Road shows building names and detailed labels"
 )
 
 map_style = map_style_options[selected_style_name]
+
+generate_button = st.sidebar.button("🗺️ Generate Map", type="primary", use_container_width=True)
 
 st.sidebar.divider()
 
@@ -96,6 +98,10 @@ st.sidebar.markdown("""
 
 if not wkt_input.strip():
     st.info("👈 Enter a WKT geometry in the sidebar to visualize it on the map")
+    st.stop()
+
+if not generate_button:
+    st.info("👈 Click 'Generate Map' button to visualize the WKT geometry")
     st.stop()
 
 def hex_to_rgb(hex_color):
