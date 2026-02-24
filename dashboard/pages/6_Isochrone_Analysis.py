@@ -157,18 +157,18 @@ else:
 
 try:
     with st.spinner(f"Generating isochrones for {location_name}..."):
-        time_intervals_seconds = [int(t * 3600) for t in time_intervals]
+        time_intervals_minutes = [int(t * 60) for t in time_intervals]
         
         queries = []
-        for i, time_sec in enumerate(time_intervals_seconds):
+        for i, time_min in enumerate(time_intervals_minutes):
             queries.append(f"""
             SELECT 
-                {time_sec} as time_seconds,
+                {time_min} as time_minutes,
                 OPENROUTESERVICE_NATIVE_APP.CORE.ISOCHRONES(
                     '{profile}',
                     {origin_lon},
                     {origin_lat},
-                    {time_sec}
+                    {time_min}
                 ) as isochrone_result
             """)
         
