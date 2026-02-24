@@ -63,6 +63,26 @@ opacity = st.sidebar.slider(
 
 st.sidebar.divider()
 
+map_style_options = {
+    "Streets (Detailed)": "mapbox://styles/mapbox/streets-v12",
+    "Light": "mapbox://styles/mapbox/light-v11",
+    "Dark": "mapbox://styles/mapbox/dark-v11",
+    "Outdoors": "mapbox://styles/mapbox/outdoors-v12",
+    "Satellite": "mapbox://styles/mapbox/satellite-v9",
+    "Satellite Streets": "mapbox://styles/mapbox/satellite-streets-v12"
+}
+
+selected_style_name = st.sidebar.selectbox(
+    "Map Style",
+    options=list(map_style_options.keys()),
+    index=0,
+    help="Choose the basemap style - Streets shows building names and detailed labels"
+)
+
+map_style = map_style_options[selected_style_name]
+
+st.sidebar.divider()
+
 st.sidebar.markdown("### Supported WKT Types")
 st.sidebar.markdown("""
 - **POINT** - Single coordinate
@@ -372,7 +392,7 @@ try:
         layers=layers,
         initial_view_state=view_state,
         tooltip=tooltip,
-        map_style='light'
+        map_style=map_style
     )
     
     st.pydeck_chart(deck, use_container_width=True)
