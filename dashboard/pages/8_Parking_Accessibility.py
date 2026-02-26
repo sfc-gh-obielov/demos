@@ -86,7 +86,6 @@ with st.spinner(f"Analyzing parking accessibility for {selected_brand} stores...
         s.id AS store_id,
         s.store_name,
         s.canonical_name AS brand,
-        s.geometry AS store_location,
         ST_X(s.geometry) AS store_lon,
         ST_Y(s.geometry) AS store_lat,
         COUNT(CASE WHEN ST_DISTANCE(s.geometry, p.geometry) <= 5000 THEN 1 END) AS parkings_5km,
@@ -96,7 +95,7 @@ with st.spinner(f"Analyzing parking accessibility for {selected_brand} stores...
       FROM FLEET_DEMOS.ROUTING.GERMANY_RETAIL_STORES s
       CROSS JOIN FLEET_DEMOS.ROUTING.GERMANY_HGV_PARKINGS p
       WHERE s.canonical_name = '{selected_brand}'
-      GROUP BY s.id, s.store_name, s.canonical_name, s.geometry, ST_X(s.geometry), ST_Y(s.geometry)
+      GROUP BY s.id, s.store_name, s.canonical_name, ST_X(s.geometry), ST_Y(s.geometry)
     )
     SELECT 
       store_id,

@@ -243,8 +243,8 @@ h3_layer = pdk.Layer(
     map_data,
     get_hexagon='hex',
     get_fill_color='COLOR',
-    get_line_color=[255, 255, 255],
-    line_width_min_pixels=2,
+    get_line_color='COLOR',
+    line_width_min_pixels=1,
     opacity=0.7,
     pickable=True,
     stroked=True,
@@ -269,7 +269,6 @@ view_state = pdk.ViewState(
 # Tooltip
 tooltip = {
     "html": """
-    <b>Hexagon:</b> {hex}<br/>
     <b>Ring:</b> {ring}<br/>
     <b>Travel Time:</b> {time:.1f} min<br/>
     <b>Distance:</b> {distance:.1f} km
