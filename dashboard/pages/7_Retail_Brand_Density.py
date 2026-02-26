@@ -308,6 +308,19 @@ with col2:
                 
                 brand_counts[brand] = brand_counts.get(brand, 0) + 1
                 
+                brands_with_counts = [
+                    ('EDEKA', row['EDEKA_COUNT']),
+                    ('NETTO', row['NETTO_COUNT']),
+                    ('REWE', row['REWE_COUNT']),
+                    ('ALDI', row['ALDI_COUNT']),
+                    ('LIDL', row['LIDL_COUNT']),
+                    ('PENNY', row['PENNY_COUNT'])
+                ]
+                
+                brands_with_counts_sorted = sorted(brands_with_counts, key=lambda x: x[1], reverse=True)
+                
+                tooltip_html = '<br/>'.join([f"<b>{b}:</b> {c}" for b, c in brands_with_counts_sorted if c > 0])
+                
                 dominance_data.append({
                     'hex_id': row['H3_CELL'],
                     'color': color,
@@ -317,7 +330,8 @@ with col2:
                     'rewe': row['REWE_COUNT'],
                     'aldi': row['ALDI_COUNT'],
                     'lidl': row['LIDL_COUNT'],
-                    'penny': row['PENNY_COUNT']
+                    'penny': row['PENNY_COUNT'],
+                    'tooltip': tooltip_html
                 })
             
             dominance_df = pd.DataFrame(dominance_data)
@@ -346,7 +360,7 @@ with col2:
             )
             
             tooltip = {
-                "html": "<b>EDEKA:</b> {edeka}<br/><b>NETTO:</b> {netto}<br/><b>REWE:</b> {rewe}<br/><b>ALDI:</b> {aldi}<br/><b>LIDL:</b> {lidl}<br/><b>PENNY:</b> {penny}",
+                "html": "{tooltip}",
                 "style": {
                     "backgroundColor": "steelblue",
                     "color": "white",
