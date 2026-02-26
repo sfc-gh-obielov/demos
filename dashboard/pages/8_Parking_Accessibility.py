@@ -132,13 +132,13 @@ with st.spinner(f"Analyzing parking accessibility for {selected_brand} stores...
 
 def get_distance_color(avg_nearest_km):
     if avg_nearest_km <= 5:
-        return [34, 139, 34]
+        return [int(34), int(139), int(34), int(200)]
     elif avg_nearest_km <= 10:
-        return [255, 215, 0]
+        return [int(255), int(215), int(0), int(200)]
     elif avg_nearest_km <= 20:
-        return [255, 140, 0]
+        return [int(255), int(140), int(0), int(200)]
     else:
-        return [220, 20, 60]
+        return [int(220), int(20), int(60), int(200)]
 
 h3_data = []
 for row in h3_result:
