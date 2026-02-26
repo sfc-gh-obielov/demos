@@ -296,7 +296,7 @@ with col2:
             )
             
             tooltip = {
-                "html": "<b>Dominant Brand:</b> {dominant_brand}<br/><b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {h3_cell}",
+                "html": "<b>Dominant Brand:</b> {dominant_brand}<br/><b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {hex_id}",
                 "style": {
                     "backgroundColor": "steelblue",
                     "color": "white",
