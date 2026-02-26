@@ -231,8 +231,7 @@ with col2:
             d.dominant_brand,
             d.store_count,
             c.center_lon,
-            c.center_lat,
-            H3_CELL_TO_BOUNDARY_WKT(d.h3_cell) as boundary_wkt
+            c.center_lat
         FROM dominant_brand d
         JOIN h3_centers c ON d.h3_cell = c.h3_cell
         WHERE d.rank = 1
@@ -245,34 +244,28 @@ with col2:
             st.warning("No dominance data available")
         else:
             brand_colors = {
-                'EDEKA': [46, 125, 50, int(opacity * 255)],
-                'NETTO': [255, 193, 7, int(opacity * 255)],
-                'REWE': [211, 47, 47, int(opacity * 255)],
-                'ALDI': [25, 118, 210, int(opacity * 255)],
-                'LIDL': [251, 140, 0, int(opacity * 255)],
-                'PENNY': [142, 36, 170, int(opacity * 255)]
+                'EDEKA': [46, 125, 50],
+                'NETTO': [255, 193, 7],
+                'REWE': [211, 47, 47],
+                'ALDI': [25, 118, 210],
+                'LIDL': [251, 140, 0],
+                'PENNY': [142, 36, 170]
             }
             
             dominance_data = []
             brand_counts = {}
             
             for row in dominance_result:
-                boundary_wkt = row['BOUNDARY_WKT']
-                coords_str = boundary_wkt.replace('POLYGON((', '').replace('))', '')
-                coords = [[float(c.split()[0]), float(c.split()[1])] for c in coords_str.split(',')]
-                
                 brand = row['DOMINANT_BRAND']
-                color = brand_colors.get(brand, [128, 128, 128, int(opacity * 255)])
+                color = brand_colors.get(brand, [128, 128, 128])
                 
                 brand_counts[brand] = brand_counts.get(brand, 0) + 1
                 
                 dominance_data.append({
-                    'polygon': [coords],
-                    'fill_color': color,
-                    'line_color': [100, 100, 100, 200],
+                    'hex_id': row['H3_CELL'],
+                    'color': color,
                     'dominant_brand': brand,
-                    'store_count': row['STORE_COUNT'],
-                    'h3_cell': row['H3_CELL']
+                    'store_count': row['STORE_COUNT']
                 })
             
             dominance_df = pd.DataFrame(dominance_data)
@@ -281,15 +274,17 @@ with col2:
             center_lon = sum([row['CENTER_LON'] for row in dominance_result]) / len(dominance_result)
             
             layer = pdk.Layer(
-                'PolygonLayer',
+                'H3HexagonLayer',
                 dominance_df,
-                get_polygon='polygon',
-                get_fill_color='fill_color',
-                get_line_color='line_color',
+                get_hexagon='hex_id',
+                get_fill_color='color',
+                get_line_color=[100, 100, 100],
                 line_width_min_pixels=1,
                 pickable=True,
-                filled=True,
                 stroked=True,
+                filled=True,
+                extruded=False,
+                opacity=opacity,
                 auto_highlight=True
             )
             
