@@ -28,9 +28,9 @@ selected_brand = st.sidebar.selectbox(
 
 h3_resolution = st.sidebar.selectbox(
     "H3 Resolution",
-    options=[5, 6, 7],
-    index=2,
-    help="H3 hexagon size: 5 = largest (~250km²), 6 = medium (~36km²), 7 = smallest (~5km²)"
+    options=[4, 5, 6, 7],
+    index=1,
+    help="H3 hexagon size: 4 = largest (~1,300km²), 5 = large (~250km²), 6 = medium (~36km²), 7 = small (~5km²)"
 )
 
 show_only_selected = st.sidebar.checkbox(
@@ -137,10 +137,8 @@ with col1:
                 density_df,
                 get_hexagon='hex_id',
                 get_fill_color='color',
-                get_line_color='color',
-                line_width_min_pixels=1,
                 pickable=True,
-                stroked=True,
+                stroked=False,
                 filled=True,
                 extruded=False,
                 opacity=opacity,
@@ -181,7 +179,7 @@ with col1:
             )
             
             tooltip = {
-                "html": "<b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {hex_id}",
+                "html": "<b>{store_count}</b> stores",
                 "style": {
                     "backgroundColor": "steelblue",
                     "color": "white",
@@ -216,6 +214,18 @@ with col2:
             FROM FLEET_DEMOS.ROUTING.GERMANY_RETAIL_STORES
             GROUP BY h3_cell, canonical_name
         ),
+        all_brands AS (
+            SELECT 
+                h3_cell,
+                MAX(CASE WHEN canonical_name = 'EDEKA' THEN store_count ELSE 0 END) as edeka_count,
+                MAX(CASE WHEN canonical_name = 'NETTO' THEN store_count ELSE 0 END) as netto_count,
+                MAX(CASE WHEN canonical_name = 'REWE' THEN store_count ELSE 0 END) as rewe_count,
+                MAX(CASE WHEN canonical_name = 'ALDI' THEN store_count ELSE 0 END) as aldi_count,
+                MAX(CASE WHEN canonical_name = 'LIDL' THEN store_count ELSE 0 END) as lidl_count,
+                MAX(CASE WHEN canonical_name = 'PENNY' THEN store_count ELSE 0 END) as penny_count
+            FROM store_h3
+            GROUP BY h3_cell
+        ),
         dominant_brand AS (
             SELECT 
                 h3_cell,
@@ -235,13 +245,19 @@ with col2:
         SELECT 
             d.h3_cell,
             d.dominant_brand,
-            d.store_count,
+            a.edeka_count,
+            a.netto_count,
+            a.rewe_count,
+            a.aldi_count,
+            a.lidl_count,
+            a.penny_count,
             c.center_lon,
             c.center_lat
         FROM dominant_brand d
+        JOIN all_brands a ON d.h3_cell = a.h3_cell
         JOIN h3_centers c ON d.h3_cell = c.h3_cell
         WHERE d.rank = 1
-        ORDER BY d.store_count DESC
+        ORDER BY (a.edeka_count + a.netto_count + a.rewe_count + a.aldi_count + a.lidl_count + a.penny_count) DESC
         """
         
         dominance_result = session.sql(dominance_query).collect()
@@ -275,7 +291,12 @@ with col2:
                     'hex_id': row['H3_CELL'],
                     'color': color,
                     'dominant_brand': brand,
-                    'store_count': row['STORE_COUNT']
+                    'edeka': row['EDEKA_COUNT'],
+                    'netto': row['NETTO_COUNT'],
+                    'rewe': row['REWE_COUNT'],
+                    'aldi': row['ALDI_COUNT'],
+                    'lidl': row['LIDL_COUNT'],
+                    'penny': row['PENNY_COUNT']
                 })
             
             dominance_df = pd.DataFrame(dominance_data)
@@ -288,10 +309,8 @@ with col2:
                 dominance_df,
                 get_hexagon='hex_id',
                 get_fill_color='color',
-                get_line_color='color',
-                line_width_min_pixels=1,
                 pickable=True,
-                stroked=True,
+                stroked=False,
                 filled=True,
                 extruded=False,
                 opacity=opacity,
@@ -306,7 +325,7 @@ with col2:
             )
             
             tooltip = {
-                "html": "<b>Dominant Brand:</b> {dominant_brand}<br/><b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {hex_id}",
+                "html": "<b>EDEKA:</b> {edeka}<br/><b>NETTO:</b> {netto}<br/><b>REWE:</b> {rewe}<br/><b>ALDI:</b> {aldi}<br/><b>LIDL:</b> {lidl}<br/><b>PENNY:</b> {penny}",
                 "style": {
                     "backgroundColor": "steelblue",
                     "color": "white",
