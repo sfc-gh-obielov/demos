@@ -228,20 +228,18 @@ st.dataframe(
 # Map visualization
 st.subheader("🗺️ Interactive Map")
 
-# Prepare data for PyDeck
-map_data = travel_times_df[['DEST_HEX', 'DURATION_MINUTES', 'DISTANCE_KM', 'RING', 'COLOR', 'DEST_LAT', 'DEST_LON']].copy()
+# Prepare data for PyDeck - convert to list of dicts with explicit type casting
+pydeck_data = []
+for _, row in travel_times_df.iterrows():
+    pydeck_data.append({
+        'hex': str(row['DEST_HEX']),
+        'time': float(row['DURATION_MINUTES']),
+        'distance': float(row['DISTANCE_KM']),
+        'ring': int(row['RING']),
+        'COLOR': row['COLOR']
+    })
 
-# Convert Snowflake Decimal types to Python native types for tooltip formatting
-map_data['DURATION_MINUTES'] = map_data['DURATION_MINUTES'].astype(float)
-map_data['DISTANCE_KM'] = map_data['DISTANCE_KM'].astype(float)
-map_data['RING'] = map_data['RING'].astype(int)
-
-map_data = map_data.rename(columns={
-    'DEST_HEX': 'hex',
-    'DURATION_MINUTES': 'time',
-    'DISTANCE_KM': 'distance',
-    'RING': 'ring'
-})
+map_data = pd.DataFrame(pydeck_data)
 
 # Create PyDeck layer
 h3_layer = pdk.Layer(
