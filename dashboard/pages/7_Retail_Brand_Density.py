@@ -107,17 +107,38 @@ with col1:
             density_data = []
             max_count = max([row['STORE_COUNT'] for row in density_result])
             
+            def get_continuous_color(normalized_value):
+                """Generate a smooth color gradient from light blue to dark red"""
+                if normalized_value <= 0.25:
+                    # Interpolate from light blue (171, 217, 233) to cyan (102, 194, 165)
+                    t = normalized_value / 0.25
+                    r = int(171 + (102 - 171) * t)
+                    g = int(217 + (194 - 217) * t)
+                    b = int(233 + (165 - 233) * t)
+                elif normalized_value <= 0.5:
+                    # Interpolate from cyan (102, 194, 165) to yellow-green (254, 224, 139)
+                    t = (normalized_value - 0.25) / 0.25
+                    r = int(102 + (254 - 102) * t)
+                    g = int(194 + (224 - 194) * t)
+                    b = int(165 + (139 - 165) * t)
+                elif normalized_value <= 0.75:
+                    # Interpolate from yellow-green (254, 224, 139) to orange (253, 174, 97)
+                    t = (normalized_value - 0.5) / 0.25
+                    r = int(254 + (253 - 254) * t)
+                    g = int(224 + (174 - 224) * t)
+                    b = int(139 + (97 - 139) * t)
+                else:
+                    # Interpolate from orange (253, 174, 97) to dark red (215, 48, 39)
+                    t = (normalized_value - 0.75) / 0.25
+                    r = int(253 + (215 - 253) * t)
+                    g = int(174 + (48 - 174) * t)
+                    b = int(97 + (39 - 97) * t)
+                
+                return [r, g, b]
+            
             for row in density_result:
                 normalized = row['STORE_COUNT'] / max_count
-                
-                if normalized < 0.25:
-                    color = [255, 255, 178]
-                elif normalized < 0.5:
-                    color = [254, 204, 92]
-                elif normalized < 0.75:
-                    color = [253, 141, 60]
-                else:
-                    color = [227, 26, 28]
+                color = get_continuous_color(normalized)
                 
                 density_data.append({
                     'hex_id': row['H3_CELL'],
