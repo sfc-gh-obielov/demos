@@ -143,21 +143,21 @@ def get_distance_color(avg_nearest_km):
 h3_data = []
 for row in h3_result:
     parking_count_col = f'AVG_PARKINGS_{distance_threshold}KM'
-    avg_parkings = row[parking_count_col]
-    avg_nearest_km = row['AVG_NEAREST_PARKING_KM']
+    avg_parkings = float(row[parking_count_col]) if row[parking_count_col] is not None else 0.0
+    avg_nearest_km = float(row['AVG_NEAREST_PARKING_KM']) if row['AVG_NEAREST_PARKING_KM'] is not None else 0.0
     
     color = get_distance_color(avg_nearest_km)
     
     h3_data.append({
-        'hex_id': row['H3_CELL'],
-        'brand': row['BRAND'],
-        'store_count': row['STORE_COUNT'],
-        'avg_parkings_5km': row['AVG_PARKINGS_5KM'],
-        'avg_parkings_10km': row['AVG_PARKINGS_10KM'],
-        'avg_parkings_15km': row['AVG_PARKINGS_15KM'],
+        'hex_id': str(row['H3_CELL']),
+        'brand': str(row['BRAND']),
+        'store_count': int(row['STORE_COUNT']),
+        'avg_parkings_5km': float(row['AVG_PARKINGS_5KM']),
+        'avg_parkings_10km': float(row['AVG_PARKINGS_10KM']),
+        'avg_parkings_15km': float(row['AVG_PARKINGS_15KM']),
         'avg_parkings': avg_parkings,
         'avg_nearest_parking_km': avg_nearest_km,
-        'accessibility_category': row['ACCESSIBILITY_CATEGORY'],
+        'accessibility_category': str(row['ACCESSIBILITY_CATEGORY']),
         'color': color
     })
 
