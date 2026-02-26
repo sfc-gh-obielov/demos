@@ -83,23 +83,14 @@ with col1:
     
     with st.spinner(f"Calculating {selected_brand} density..."):
         density_query = f"""
-        WITH store_h3 AS (
-            SELECT 
-                H3_POINT_TO_CELL_STRING(geometry, {h3_resolution}) as h3_cell,
-                COUNT(*) as store_count,
-                AVG(ST_X(geometry)) as center_lon,
-                AVG(ST_Y(geometry)) as center_lat
-            FROM FLEET_DEMOS.ROUTING.GERMANY_RETAIL_STORES
-            WHERE canonical_name = '{selected_brand}'
-            GROUP BY h3_cell
-        )
         SELECT 
-            h3_cell,
-            store_count,
-            center_lon,
-            center_lat,
-            H3_CELL_TO_BOUNDARY_WKT(h3_cell) as boundary_wkt
-        FROM store_h3
+            H3_POINT_TO_CELL_STRING(geometry, {h3_resolution}) as h3_cell,
+            COUNT(*) as store_count,
+            AVG(ST_X(geometry)) as center_lon,
+            AVG(ST_Y(geometry)) as center_lat
+        FROM FLEET_DEMOS.ROUTING.GERMANY_RETAIL_STORES
+        WHERE canonical_name = '{selected_brand}'
+        GROUP BY h3_cell
         ORDER BY store_count DESC
         """
         
@@ -112,27 +103,21 @@ with col1:
             max_count = max([row['STORE_COUNT'] for row in density_result])
             
             for row in density_result:
-                boundary_wkt = row['BOUNDARY_WKT']
-                coords_str = boundary_wkt.replace('POLYGON((', '').replace('))', '')
-                coords = [[float(c.split()[0]), float(c.split()[1])] for c in coords_str.split(',')]
-                
                 normalized = row['STORE_COUNT'] / max_count
                 
                 if normalized < 0.25:
-                    color = [255, 255, 178, int(opacity * 255)]
+                    color = [255, 255, 178]
                 elif normalized < 0.5:
-                    color = [254, 204, 92, int(opacity * 255)]
+                    color = [254, 204, 92]
                 elif normalized < 0.75:
-                    color = [253, 141, 60, int(opacity * 255)]
+                    color = [253, 141, 60]
                 else:
-                    color = [227, 26, 28, int(opacity * 255)]
+                    color = [227, 26, 28]
                 
                 density_data.append({
-                    'polygon': [coords],
-                    'fill_color': color,
-                    'line_color': [100, 100, 100, 200],
-                    'store_count': row['STORE_COUNT'],
-                    'h3_cell': row['H3_CELL']
+                    'hex_id': row['H3_CELL'],
+                    'color': color,
+                    'store_count': row['STORE_COUNT']
                 })
             
             density_df = pd.DataFrame(density_data)
@@ -143,15 +128,17 @@ with col1:
             layers = []
             
             layers.append(pdk.Layer(
-                'PolygonLayer',
+                'H3HexagonLayer',
                 density_df,
-                get_polygon='polygon',
-                get_fill_color='fill_color',
-                get_line_color='line_color',
+                get_hexagon='hex_id',
+                get_fill_color='color',
+                get_line_color=[100, 100, 100],
                 line_width_min_pixels=1,
                 pickable=True,
-                filled=True,
                 stroked=True,
+                filled=True,
+                extruded=False,
+                opacity=opacity,
                 auto_highlight=True
             ))
             
@@ -189,7 +176,7 @@ with col1:
             )
             
             tooltip = {
-                "html": "<b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {h3_cell}",
+                "html": "<b>Stores:</b> {store_count}<br/><b>H3 Cell:</b> {hex_id}",
                 "style": {
                     "backgroundColor": "steelblue",
                     "color": "white",
