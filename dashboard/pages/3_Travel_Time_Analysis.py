@@ -88,10 +88,14 @@ with st.spinner("Loading hexagons..."):
 st.sidebar.header("Settings")
 
 # Hexagon selector
+hex_list = hexagons_df['HEX_ID'].tolist()
+default_hex = '89283082d6bffff'
+default_index = hex_list.index(default_hex) if default_hex in hex_list else 0
+
 selected_hex = st.sidebar.selectbox(
     "Select Origin Hexagon",
-    options=hexagons_df['HEX_ID'].tolist(),
-    index=0,
+    options=hex_list,
+    index=default_index,
     help="Choose the hexagon to analyze travel times from"
 )
 
@@ -273,9 +277,9 @@ view_state = pdk.ViewState(
 # Tooltip
 tooltip = {
     "html": """
-    <b>Ring:</b> {ring}<br/>
-    <b>Travel Time:</b> {time:.1f} min<br/>
-    <b>Distance:</b> {distance:.1f} km
+    <b>Ring:</b> {{ring}}<br/>
+    <b>Travel Time:</b> {{time:.1f}} min<br/>
+    <b>Distance:</b> {{distance:.1f}} km
     """,
     "style": {
         "backgroundColor": "steelblue",
