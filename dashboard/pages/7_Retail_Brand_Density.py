@@ -22,7 +22,7 @@ st.sidebar.header("Visualization Controls")
 selected_brand = st.sidebar.selectbox(
     "Select Brand",
     options=available_brands,
-    index=0,
+    index=2,
     help="Choose a retail brand to analyze"
 )
 
