@@ -181,8 +181,8 @@ layers.append(store_layer)
 if show_parkings:
     parking_query = """
     SELECT 
-      ST_X(geometry) AS lon,
-      ST_Y(geometry) AS lat
+      ST_X(ST_CENTROID(geometry)) AS lon,
+      ST_Y(ST_CENTROID(geometry)) AS lat
     FROM FLEET_DEMOS.ROUTING.GERMANY_HGV_PARKINGS
     """
     
