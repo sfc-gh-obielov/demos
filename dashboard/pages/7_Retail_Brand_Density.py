@@ -26,12 +26,17 @@ selected_brand = st.sidebar.selectbox(
     help="Choose a retail brand to analyze"
 )
 
-h3_resolution = st.sidebar.slider(
+h3_resolution = st.sidebar.selectbox(
     "H3 Resolution",
-    min_value=5,
-    max_value=9,
-    value=7,
-    help="Higher resolution = smaller hexagons (7 is recommended for city-level analysis)"
+    options=[5, 6, 7],
+    index=2,
+    help="H3 hexagon size: 5 = largest (~250km²), 6 = medium (~36km²), 7 = smallest (~5km²)"
+)
+
+show_only_selected = st.sidebar.checkbox(
+    "Show Only Selected Brand Dominance",
+    value=False,
+    help="In Map 2, show only areas where the selected brand is dominant"
 )
 
 st.sidebar.divider()
@@ -193,7 +198,8 @@ with col1:
             
             st.pydeck_chart(deck, use_container_width=True)
             
-            st.metric(f"Total {selected_brand} Stores", len(density_result) * density_result[0]['STORE_COUNT'] if density_result else 0)
+            total_stores = sum([row['STORE_COUNT'] for row in density_result])
+            st.metric(f"Total {selected_brand} Stores", total_stores)
             st.metric("Hexagons with Stores", len(density_result))
             st.metric("Max Stores per Hexagon", max_count)
 
@@ -257,6 +263,10 @@ with col2:
             
             for row in dominance_result:
                 brand = row['DOMINANT_BRAND']
+                
+                if show_only_selected and brand != selected_brand:
+                    continue
+                
                 color = brand_colors.get(brand, [128, 128, 128])
                 
                 brand_counts[brand] = brand_counts.get(brand, 0) + 1
