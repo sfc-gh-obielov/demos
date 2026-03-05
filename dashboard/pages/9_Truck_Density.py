@@ -3,6 +3,7 @@ import pandas as pd
 import pydeck as pdk
 from snowflake.snowpark.context import get_active_session
 from datetime import date, timedelta
+import hashlib
 
 st.set_page_config(
     page_title="Truck Location Density - Fleet Analytics",
@@ -79,7 +80,7 @@ h3_resolution = st.sidebar.selectbox(
 
 color_by = st.sidebar.selectbox(
     "Color By",
-    options=["Point Count", "Unique Trucks", "Unique Trips", "Avg Speed"],
+    options=["Point Count", "Unique Trucks", "Unique Trips", "Avg Speed", "Origin Location", "Destination Location"],
     index=0
 )
 
@@ -125,91 +126,223 @@ if use_date_filter:
 
 where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
-if color_by == "Point Count":
-    metric_col = "COUNT(*)"
-    metric_name = "point_count"
-elif color_by == "Unique Trucks":
-    metric_col = "COUNT(DISTINCT TRUCK_ID)"
-    metric_name = "truck_count"
-elif color_by == "Unique Trips":
-    metric_col = "COUNT(DISTINCT TRIP_ID)"
-    metric_name = "trip_count"
+LOCATION_COLORS = [
+    [231, 76, 60],    # Red
+    [46, 204, 113],   # Green
+    [52, 152, 219],   # Blue
+    [155, 89, 182],   # Purple
+    [241, 196, 15],   # Yellow
+    [230, 126, 34],   # Orange
+    [26, 188, 156],   # Teal
+    [52, 73, 94],     # Dark blue
+    [149, 165, 166],  # Gray
+    [192, 57, 43],    # Dark red
+    [39, 174, 96],    # Dark green
+    [41, 128, 185],   # Dark blue
+    [142, 68, 173],   # Dark purple
+    [243, 156, 18],   # Dark yellow
+    [211, 84, 0],     # Dark orange
+]
+
+def get_location_color(location_id):
+    if not location_id:
+        return [128, 128, 128]
+    hash_val = int(hashlib.md5(str(location_id).encode()).hexdigest()[:8], 16)
+    return LOCATION_COLORS[hash_val % len(LOCATION_COLORS)]
+
+if color_by in ["Origin Location", "Destination Location"]:
+    location_type = "DWELL_WAREHOUSE" if color_by == "Origin Location" else "DWELL_DESTINATION"
+    
+    query = f"""
+    WITH trip_locations AS (
+        SELECT 
+            TRIP_ID,
+            LOCATION_ID as loc_id
+        FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
+        WHERE LOCATION_TYPE = '{location_type}'
+          AND LOCATION_ID IS NOT NULL
+          AND {where_sql}
+        GROUP BY TRIP_ID, LOCATION_ID
+    ),
+    points_with_location AS (
+        SELECT 
+            t.LATITUDE,
+            t.LONGITUDE,
+            t.TRUCK_ID,
+            t.TRIP_ID,
+            t.SPEED_KMH,
+            COALESCE(tl.loc_id, 'UNKNOWN') as location_id
+        FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST t
+        LEFT JOIN trip_locations tl ON t.TRIP_ID = tl.TRIP_ID
+        WHERE {where_sql}
+    )
+    SELECT 
+        H3_LATLNG_TO_CELL_STRING(LATITUDE, LONGITUDE, {h3_resolution}) as h3_cell,
+        MODE(location_id) as dominant_location,
+        COUNT(*) as point_count,
+        COUNT(DISTINCT TRUCK_ID) as truck_count,
+        COUNT(DISTINCT TRIP_ID) as trip_count,
+        AVG(SPEED_KMH) as avg_speed,
+        AVG(LATITUDE) as center_lat,
+        AVG(LONGITUDE) as center_lon,
+        COUNT(DISTINCT location_id) as location_count
+    FROM points_with_location
+    GROUP BY h3_cell
+    HAVING h3_cell IS NOT NULL
+    ORDER BY point_count DESC
+    """
+    
+    with st.spinner(f"Calculating density by {color_by.lower()}..."):
+        try:
+            result = session.sql(query).collect()
+        except Exception as e:
+            st.error(f"Query error: {e}")
+            st.code(query)
+            st.stop()
+    
+    if not result:
+        st.warning("No data found for the selected filters")
+        st.stop()
+    
+    locations = list(set([row['DOMINANT_LOCATION'] for row in result if row['DOMINANT_LOCATION']]))
+    location_color_map = {loc: get_location_color(loc) for loc in locations}
+    
+    data = []
+    for row in result:
+        loc = row['DOMINANT_LOCATION']
+        color = location_color_map.get(loc, [128, 128, 128])
+        elevation = row['POINT_COUNT'] / max([r['POINT_COUNT'] for r in result]) * 50000 if extruded else 0
+        
+        data.append({
+            'hex_id': row['H3_CELL'],
+            'color': color,
+            'elevation': elevation,
+            'point_count': row['POINT_COUNT'],
+            'truck_count': row['TRUCK_COUNT'],
+            'trip_count': row['TRIP_COUNT'],
+            'avg_speed': round(row['AVG_SPEED'], 1) if row['AVG_SPEED'] else 0,
+            'location': loc[:20] + '...' if loc and len(loc) > 20 else loc,
+            'location_count': row['LOCATION_COUNT']
+        })
+    
+    df = pd.DataFrame(data)
+    
+    center_lat = sum([row['CENTER_LAT'] for row in result]) / len(result)
+    center_lon = sum([row['CENTER_LON'] for row in result]) / len(result)
+    
+    tooltip = {
+        "html": """
+        <b>Location:</b> {location}<br/>
+        <b>Points:</b> {point_count}<br/>
+        <b>Trucks:</b> {truck_count}<br/>
+        <b>Trips:</b> {trip_count}<br/>
+        <b>Locations in hex:</b> {location_count}
+        """,
+        "style": {
+            "backgroundColor": "#2d3436",
+            "color": "white",
+            "padding": "10px",
+            "borderRadius": "5px"
+        }
+    }
+
 else:
-    metric_col = "AVG(SPEED_KMH)"
-    metric_name = "avg_speed"
+    if color_by == "Point Count":
+        metric_col = "COUNT(*)"
+    elif color_by == "Unique Trucks":
+        metric_col = "COUNT(DISTINCT TRUCK_ID)"
+    elif color_by == "Unique Trips":
+        metric_col = "COUNT(DISTINCT TRIP_ID)"
+    else:
+        metric_col = "AVG(SPEED_KMH)"
 
-query = f"""
-SELECT 
-    H3_LATLNG_TO_CELL_STRING(LATITUDE, LONGITUDE, {h3_resolution}) as h3_cell,
-    {metric_col} as metric_value,
-    COUNT(*) as point_count,
-    COUNT(DISTINCT TRUCK_ID) as truck_count,
-    COUNT(DISTINCT TRIP_ID) as trip_count,
-    AVG(SPEED_KMH) as avg_speed,
-    AVG(LATITUDE) as center_lat,
-    AVG(LONGITUDE) as center_lon
-FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
-WHERE {where_sql}
-GROUP BY h3_cell
-HAVING h3_cell IS NOT NULL
-ORDER BY metric_value DESC
-"""
+    query = f"""
+    SELECT 
+        H3_LATLNG_TO_CELL_STRING(LATITUDE, LONGITUDE, {h3_resolution}) as h3_cell,
+        {metric_col} as metric_value,
+        COUNT(*) as point_count,
+        COUNT(DISTINCT TRUCK_ID) as truck_count,
+        COUNT(DISTINCT TRIP_ID) as trip_count,
+        AVG(SPEED_KMH) as avg_speed,
+        AVG(LATITUDE) as center_lat,
+        AVG(LONGITUDE) as center_lon
+    FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
+    WHERE {where_sql}
+    GROUP BY h3_cell
+    HAVING h3_cell IS NOT NULL
+    ORDER BY metric_value DESC
+    """
 
-with st.spinner("Calculating density..."):
-    try:
-        result = session.sql(query).collect()
-    except Exception as e:
-        st.error(f"Query error: {e}")
-        st.code(query)
+    with st.spinner("Calculating density..."):
+        try:
+            result = session.sql(query).collect()
+        except Exception as e:
+            st.error(f"Query error: {e}")
+            st.code(query)
+            st.stop()
+
+    if not result:
+        st.warning("No data found for the selected filters")
         st.stop()
 
-if not result:
-    st.warning("No data found for the selected filters")
-    st.stop()
+    max_value = max([row['METRIC_VALUE'] for row in result])
+    min_value = min([row['METRIC_VALUE'] for row in result])
 
-max_value = max([row['METRIC_VALUE'] for row in result])
-min_value = min([row['METRIC_VALUE'] for row in result])
+    def get_color(value, min_val, max_val):
+        if max_val == min_val:
+            normalized = 0.5
+        else:
+            normalized = (value - min_val) / (max_val - min_val)
+        
+        if normalized <= 0.25:
+            t = normalized / 0.25
+            r, g, b = int(171 + (102 - 171) * t), int(217 + (194 - 217) * t), int(233 + (165 - 233) * t)
+        elif normalized <= 0.5:
+            t = (normalized - 0.25) / 0.25
+            r, g, b = int(102 + (254 - 102) * t), int(194 + (224 - 194) * t), int(165 + (139 - 165) * t)
+        elif normalized <= 0.75:
+            t = (normalized - 0.5) / 0.25
+            r, g, b = int(254 + (253 - 254) * t), int(224 + (174 - 224) * t), int(139 + (97 - 139) * t)
+        else:
+            t = (normalized - 0.75) / 0.25
+            r, g, b = int(253 + (215 - 253) * t), int(174 + (48 - 174) * t), int(97 + (39 - 97) * t)
+        
+        return [r, g, b]
 
-def get_color(value, min_val, max_val):
-    if max_val == min_val:
-        normalized = 0.5
-    else:
-        normalized = (value - min_val) / (max_val - min_val)
-    
-    if normalized <= 0.25:
-        t = normalized / 0.25
-        r, g, b = int(171 + (102 - 171) * t), int(217 + (194 - 217) * t), int(233 + (165 - 233) * t)
-    elif normalized <= 0.5:
-        t = (normalized - 0.25) / 0.25
-        r, g, b = int(102 + (254 - 102) * t), int(194 + (224 - 194) * t), int(165 + (139 - 165) * t)
-    elif normalized <= 0.75:
-        t = (normalized - 0.5) / 0.25
-        r, g, b = int(254 + (253 - 254) * t), int(224 + (174 - 224) * t), int(139 + (97 - 139) * t)
-    else:
-        t = (normalized - 0.75) / 0.25
-        r, g, b = int(253 + (215 - 253) * t), int(174 + (48 - 174) * t), int(97 + (39 - 97) * t)
-    
-    return [r, g, b]
+    data = []
+    for row in result:
+        color = get_color(row['METRIC_VALUE'], min_value, max_value)
+        elevation = row['METRIC_VALUE'] / max_value * 50000 if extruded else 0
+        
+        data.append({
+            'hex_id': row['H3_CELL'],
+            'color': color,
+            'elevation': elevation,
+            'point_count': row['POINT_COUNT'],
+            'truck_count': row['TRUCK_COUNT'],
+            'trip_count': row['TRIP_COUNT'],
+            'avg_speed': round(row['AVG_SPEED'], 1) if row['AVG_SPEED'] else 0
+        })
 
-data = []
-for row in result:
-    color = get_color(row['METRIC_VALUE'], min_value, max_value)
-    elevation = row['METRIC_VALUE'] / max_value * 50000 if extruded else 0
-    
-    data.append({
-        'hex_id': row['H3_CELL'],
-        'color': color,
-        'elevation': elevation,
-        'point_count': row['POINT_COUNT'],
-        'truck_count': row['TRUCK_COUNT'],
-        'trip_count': row['TRIP_COUNT'],
-        'avg_speed': round(row['AVG_SPEED'], 1) if row['AVG_SPEED'] else 0
-    })
+    df = pd.DataFrame(data)
 
-df = pd.DataFrame(data)
+    center_lat = sum([row['CENTER_LAT'] for row in result]) / len(result)
+    center_lon = sum([row['CENTER_LON'] for row in result]) / len(result)
 
-center_lat = sum([row['CENTER_LAT'] for row in result]) / len(result)
-center_lon = sum([row['CENTER_LON'] for row in result]) / len(result)
+    tooltip = {
+        "html": """
+        <b>Points:</b> {point_count}<br/>
+        <b>Trucks:</b> {truck_count}<br/>
+        <b>Trips:</b> {trip_count}<br/>
+        <b>Avg Speed:</b> {avg_speed} km/h
+        """,
+        "style": {
+            "backgroundColor": "#2d3436",
+            "color": "white",
+            "padding": "10px",
+            "borderRadius": "5px"
+        }
+    }
 
 layer = pdk.Layer(
     'H3HexagonLayer',
@@ -233,21 +366,6 @@ view_state = pdk.ViewState(
     pitch=45 if extruded else 0
 )
 
-tooltip = {
-    "html": """
-    <b>Points:</b> {point_count}<br/>
-    <b>Trucks:</b> {truck_count}<br/>
-    <b>Trips:</b> {trip_count}<br/>
-    <b>Avg Speed:</b> {avg_speed} km/h
-    """,
-    "style": {
-        "backgroundColor": "#2d3436",
-        "color": "white",
-        "padding": "10px",
-        "borderRadius": "5px"
-    }
-}
-
 deck = pdk.Deck(
     layers=[layer],
     initial_view_state=view_state,
@@ -266,21 +384,44 @@ with col1:
 with col2:
     st.metric("Hexagons", f"{len(result):,}")
 with col3:
-    total_trucks = len(set([t for row in result for t in [row['TRUCK_COUNT']]]))
     unique_trucks = session.sql(f"SELECT COUNT(DISTINCT TRUCK_ID) as cnt FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST WHERE {where_sql}").collect()[0]['CNT']
     st.metric("Unique Trucks", unique_trucks)
 with col4:
     avg_speed_overall = sum([row['AVG_SPEED'] * row['POINT_COUNT'] for row in result]) / total_points if total_points > 0 else 0
     st.metric("Avg Speed", f"{avg_speed_overall:.1f} km/h")
 
-with st.expander("📊 Top 10 Hexagons by Density"):
-    top_df = pd.DataFrame([{
-        'H3 Cell': row['H3_CELL'],
-        'Points': row['POINT_COUNT'],
-        'Trucks': row['TRUCK_COUNT'],
-        'Trips': row['TRIP_COUNT'],
-        'Avg Speed (km/h)': round(row['AVG_SPEED'], 1) if row['AVG_SPEED'] else 0
-    } for row in result[:10]])
+if color_by in ["Origin Location", "Destination Location"]:
+    with st.expander("🎨 Location Legend"):
+        legend_data = []
+        for loc in sorted(locations)[:20]:
+            color = location_color_map.get(loc, [128, 128, 128])
+            hex_color = '#{:02x}{:02x}{:02x}'.format(*color)
+            legend_data.append({'Location': loc, 'Color': hex_color})
+        
+        legend_df = pd.DataFrame(legend_data)
+        
+        cols = st.columns(4)
+        for i, row in legend_df.iterrows():
+            with cols[i % 4]:
+                st.markdown(f"<span style='color:{row['Color']};font-size:20px;'>●</span> {row['Location'][:25]}", unsafe_allow_html=True)
+
+with st.expander("📊 Top 10 Hexagons"):
+    if color_by in ["Origin Location", "Destination Location"]:
+        top_df = pd.DataFrame([{
+            'H3 Cell': row['H3_CELL'],
+            'Location': row['DOMINANT_LOCATION'][:30] if row['DOMINANT_LOCATION'] else 'N/A',
+            'Points': row['POINT_COUNT'],
+            'Trucks': row['TRUCK_COUNT'],
+            'Trips': row['TRIP_COUNT']
+        } for row in result[:10]])
+    else:
+        top_df = pd.DataFrame([{
+            'H3 Cell': row['H3_CELL'],
+            'Points': row['POINT_COUNT'],
+            'Trucks': row['TRUCK_COUNT'],
+            'Trips': row['TRIP_COUNT'],
+            'Avg Speed (km/h)': round(row['AVG_SPEED'], 1) if row['AVG_SPEED'] else 0
+        } for row in result[:10]])
     st.dataframe(top_df, use_container_width=True)
 
 with st.expander("🔍 Query Used"):
