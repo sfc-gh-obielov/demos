@@ -307,10 +307,9 @@ with tab3:
 
         with st.spinner("Loading route geometries..."):
             try:
-                geom_query = f"""
+                expected_query = f"""
                 SELECT 
                     ST_ASGEOJSON(t.EXPECTED_PATH) AS expected_geojson,
-                    ST_ASGEOJSON(t.ACTUAL_PATH) AS actual_geojson,
                     e.ORIGIN_LAT AS start_lat,
                     e.ORIGIN_LNG AS start_lng,
                     e.DEST_LAT AS end_lat,
@@ -326,7 +325,15 @@ with tab3:
                     ON s.ORIGIN_ID = e.ORIGIN_ID AND s.DEST_ID = e.DEST_ID
                 WHERE t.TRIP_ID = '{selected_trip}'
                 """
-                geom_df = session.sql(geom_query).to_pandas()
+                geom_df = session.sql(expected_query).to_pandas()
+
+                actual_pts_query = f"""
+                SELECT ST_X(GEOMETRY) AS LNG, ST_Y(GEOMETRY) AS LAT
+                FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+                WHERE TRIP_ID = '{selected_trip}'
+                ORDER BY TS
+                """
+                actual_pts_df = session.sql(actual_pts_query).to_pandas()
 
                 if not geom_df.empty and geom_df['EXPECTED_GEOJSON'].iloc[0]:
                     expected_geo = json.loads(geom_df['EXPECTED_GEOJSON'].iloc[0])
@@ -354,39 +361,19 @@ with tab3:
                             )
                         )
 
-                    actual_geojson_str = geom_df['ACTUAL_GEOJSON'].iloc[0]
-                    if actual_geojson_str:
-                        actual_geo = json.loads(actual_geojson_str)
-                        if actual_geo.get('type') == 'GeometryCollection' and 'geometries' in actual_geo:
-                            actual_points = []
-                            for g in actual_geo['geometries']:
-                                if g.get('type') == 'Point' and 'coordinates' in g:
-                                    actual_points.append(g['coordinates'])
-                            if len(actual_points) > 1:
-                                layers.append(
-                                    pdk.Layer(
-                                        "PathLayer",
-                                        data=[{"path": actual_points, "tooltip": "Actual GPS Path"}],
-                                        get_path="path",
-                                        get_color=[50, 100, 255, 200],
-                                        get_width=4,
-                                        width_min_pixels=2,
-                                        pickable=True,
-                                    )
-                                )
-                        elif actual_geo.get('type') == 'MultiPoint' and 'coordinates' in actual_geo:
-                            if len(actual_geo['coordinates']) > 1:
-                                layers.append(
-                                    pdk.Layer(
-                                        "PathLayer",
-                                        data=[{"path": actual_geo['coordinates'], "tooltip": "Actual GPS Path"}],
-                                        get_path="path",
-                                        get_color=[50, 100, 255, 200],
-                                        get_width=4,
-                                        width_min_pixels=2,
-                                        pickable=True,
-                                    )
-                                )
+                    if not actual_pts_df.empty and len(actual_pts_df) > 1:
+                        actual_path = actual_pts_df[["LNG", "LAT"]].values.tolist()
+                        layers.append(
+                            pdk.Layer(
+                                "PathLayer",
+                                data=[{"path": actual_path, "tooltip": "Actual GPS Path"}],
+                                get_path="path",
+                                get_color=[50, 100, 255, 200],
+                                get_width=4,
+                                width_min_pixels=2,
+                                pickable=True,
+                            )
+                        )
 
                     layers.append(
                         pdk.Layer(
