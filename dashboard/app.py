@@ -18,6 +18,7 @@ st.markdown("### Available Pages:")
 st.markdown("""
 - **Overview** - Summary statistics and distributions
 - **Route Comparison** - Compare actual GPS routes with OpenRouteService calculated routes
+- **Route Deviations** - Detect and analyze truck route deviations vs ORS-expected paths
 """)
 
 st.divider()
