@@ -237,8 +237,8 @@ pydeck_data = []
 for _, row in travel_times_df.iterrows():
     pydeck_data.append({
         'hex': str(row['DEST_HEX']),
-        'time': float(row['DURATION_MINUTES']),
-        'distance': float(row['DISTANCE_KM']),
+        'time': round(float(row['DURATION_MINUTES']), 1),
+        'distance': round(float(row['DISTANCE_KM']), 1),
         'ring': int(row['RING']),
         'COLOR': row['COLOR']
     })
@@ -277,9 +277,9 @@ view_state = pdk.ViewState(
 # Tooltip
 tooltip = {
     "html": """
-    <b>Ring:</b> {{ring}}<br/>
-    <b>Travel Time:</b> {{time:.1f}} min<br/>
-    <b>Distance:</b> {{distance:.1f}} km
+    <b>Ring:</b> {ring}<br/>
+    <b>Travel Time:</b> {time} min<br/>
+    <b>Distance:</b> {distance} km
     """,
     "style": {
         "backgroundColor": "steelblue",
