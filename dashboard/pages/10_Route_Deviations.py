@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import altair as alt
 import pydeck as pdk
 import json
@@ -328,12 +329,46 @@ with tab3:
                 geom_df = session.sql(expected_query).to_pandas()
 
                 actual_pts_query = f"""
-                SELECT ST_X(GEOMETRY) AS LNG, ST_Y(GEOMETRY) AS LAT
-                FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
-                WHERE TRIP_ID = '{selected_trip}'
-                ORDER BY TS
+                WITH ordered AS (
+                    SELECT 
+                        ST_X(GEOMETRY) AS LNG, 
+                        ST_Y(GEOMETRY) AS LAT,
+                        TS,
+                        ROW_NUMBER() OVER (ORDER BY TS) AS RN
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+                    WHERE TRIP_ID = '{selected_trip}'
+                )
+                SELECT 
+                    a.LNG, a.LAT, a.TS, a.RN,
+                    COALESCE(ST_DISTANCE(ST_MAKEPOINT(a.LNG, a.LAT), ST_MAKEPOINT(b.LNG, b.LAT)), 0) AS DIST_M,
+                    COALESCE(TIMESTAMPDIFF('SECOND', b.TS, a.TS), 0) AS DT_SEC
+                FROM ordered a
+                LEFT JOIN ordered b ON b.RN = a.RN - 1
+                ORDER BY a.RN
                 """
                 actual_pts_df = session.sql(actual_pts_query).to_pandas()
+                if not actual_pts_df.empty and len(actual_pts_df) > 1:
+                    actual_pts_df['SPEED_KMH'] = np.where(
+                        actual_pts_df['DT_SEC'] > 0,
+                        (actual_pts_df['DIST_M'] / actual_pts_df['DT_SEC']) * 3.6,
+                        0
+                    )
+                    actual_pts_df = actual_pts_df[actual_pts_df['SPEED_KMH'] <= 250].reset_index(drop=True)
+                    for _ in range(3):
+                        if len(actual_pts_df) < 2:
+                            break
+                        lngs = actual_pts_df['LNG'].values
+                        lats = actual_pts_df['LAT'].values
+                        dlat = np.radians(np.diff(lats))
+                        dlng = np.radians(np.diff(lngs))
+                        lat1 = np.radians(lats[:-1])
+                        lat2 = np.radians(lats[1:])
+                        a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlng/2)**2
+                        dists = 6371000 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+                        keep = np.concatenate([[True], dists < 50000])
+                        if keep.all():
+                            break
+                        actual_pts_df = actual_pts_df[keep].reset_index(drop=True)
 
                 if not geom_df.empty and geom_df['EXPECTED_GEOJSON'].iloc[0]:
                     expected_geo = json.loads(geom_df['EXPECTED_GEOJSON'].iloc[0])

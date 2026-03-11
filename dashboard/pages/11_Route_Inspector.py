@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import pydeck as pdk
 import json
 from snowflake.snowpark.context import get_active_session
@@ -53,17 +54,26 @@ selected_trip = st.selectbox(
 )
 
 show_expected = st.toggle("Show Expected Route", value=True)
+filter_teleportation = st.toggle("Filter GPS Teleportation", value=True, help="Remove GPS points that jump >50km between consecutive pings")
 render_mode = st.radio("Actual Path Rendering", ["Points", "LineString (timestamp-ordered)"], horizontal=True)
 
 points_query = f"""
+WITH ordered AS (
+    SELECT 
+        TS,
+        ST_X(GEOMETRY) AS LNG,
+        ST_Y(GEOMETRY) AS LAT,
+        ROW_NUMBER() OVER (ORDER BY TS) AS RN
+    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+    WHERE TRIP_ID = '{selected_trip}'
+)
 SELECT 
-    TS,
-    ST_X(GEOMETRY) AS LNG,
-    ST_Y(GEOMETRY) AS LAT,
-    ROW_NUMBER() OVER (ORDER BY TS) AS SEQ
-FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
-WHERE TRIP_ID = '{selected_trip}'
-ORDER BY TS
+    a.TS, a.LNG, a.LAT, a.RN AS SEQ,
+    COALESCE(ST_DISTANCE(ST_MAKEPOINT(a.LNG, a.LAT), ST_MAKEPOINT(b.LNG, b.LAT)), 0) AS DIST_M,
+    COALESCE(TIMESTAMPDIFF('SECOND', b.TS, a.TS), 0) AS DT_SEC
+FROM ordered a
+LEFT JOIN ordered b ON b.RN = a.RN - 1
+ORDER BY a.RN
 """
 points_df = session.sql(points_query).to_pandas()
 
@@ -71,9 +81,36 @@ if points_df.empty:
     st.warning("No GPS points found for this trip")
     st.stop()
 
+raw_count = len(points_df)
+if filter_teleportation and len(points_df) > 1:
+    points_df['SPEED_KMH'] = np.where(
+        points_df['DT_SEC'] > 0,
+        (points_df['DIST_M'] / points_df['DT_SEC']) * 3.6,
+        0
+    )
+    points_df = points_df[points_df['SPEED_KMH'] <= 250].reset_index(drop=True)
+    for _ in range(3):
+        if len(points_df) < 2:
+            break
+        lngs = points_df['LNG'].values
+        lats = points_df['LAT'].values
+        dlat = np.radians(np.diff(lats))
+        dlng = np.radians(np.diff(lngs))
+        lat1 = np.radians(lats[:-1])
+        lat2 = np.radians(lats[1:])
+        a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlng/2)**2
+        dists = 6371000 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+        keep = np.concatenate([[True], dists < 50000])
+        if keep.all():
+            break
+        points_df = points_df[keep].reset_index(drop=True)
+
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("GPS Points", f"{len(points_df):,}")
+    label = f"{len(points_df):,}"
+    if filter_teleportation and len(points_df) < raw_count:
+        label += f" (filtered from {raw_count:,})"
+    st.metric("GPS Points", label)
 with col2:
     st.metric("First Ping", str(points_df["TS"].iloc[0])[:19])
 with col3:
