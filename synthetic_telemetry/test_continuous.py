@@ -114,22 +114,13 @@ class ScheduleAwareRouter:
                 self._cache_dict[key] = route
             else:
                 self.cache_misses += 1
-                distance_km = haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)
-                duration_min = (distance_km / 60) * 60
-                num_points = max(10, int(distance_km / 2))
-                coords = []
-                for i in range(num_points):
-                    t = i / (num_points - 1)
-                    coords.append((origin_lng + t * (dest_lng - origin_lng),
-                                   origin_lat + t * (dest_lat - origin_lat)))
-                route = RouteResult(
-                    origin_id=origin_id, dest_id=dest_id,
-                    origin_coords=(origin_lng, origin_lat),
-                    dest_coords=(dest_lng, dest_lat),
-                    distance_km=distance_km, duration_min=duration_min,
-                    coordinates=coords, num_points=len(coords)
+                route = self._call_ors_via_waypoints(
+                    [(origin_lng, origin_lat), (dest_lng, dest_lat)],
+                    origin_id=origin_id,
+                    dest_id=dest_id
                 )
-                self._cache_dict[key] = route
+                if route is not None:
+                    self._cache_dict[key] = route
 
         base_route = self._cache_dict.get(key)
         if base_route is None:
@@ -175,69 +166,102 @@ class ScheduleAwareRouter:
         self,
         waypoint_coords: List[Tuple[float, float]],
         origin_id: str = 'detour_origin',
-        dest_id: str = 'detour_dest'
+        dest_id: str = 'detour_dest',
+        max_retries: int = 3
     ) -> Optional[RouteResult]:
         self.detour_ors_calls += 1
-        cursor = self.conn.cursor()
-        try:
-            coord_arrays = ", ".join(
-                f"ARRAY_CONSTRUCT({lng}, {lat})" for lng, lat in waypoint_coords
-            )
-            query = f"""
-                SELECT TO_JSON(OPENROUTESERVICE_NATIVE_APP.CORE.DIRECTIONS(
-                    'driving-hgv',
-                    OBJECT_CONSTRUCT(
-                        'coordinates', ARRAY_CONSTRUCT({coord_arrays})
-                    )
-                ))::VARCHAR AS route_response
-            """
-            cursor.execute(query)
-            row = cursor.fetchone()
-            if row is None:
+
+        for attempt in range(max_retries):
+            cursor = self.conn.cursor()
+            try:
+                coord_arrays = ", ".join(
+                    f"ARRAY_CONSTRUCT({lng}, {lat})" for lng, lat in waypoint_coords
+                )
+                query = f"""
+                    SELECT TO_JSON(OPENROUTESERVICE_NATIVE_APP.CORE.DIRECTIONS(
+                        'driving-hgv',
+                        OBJECT_CONSTRUCT(
+                            'coordinates', ARRAY_CONSTRUCT({coord_arrays})
+                        )
+                    ))::VARCHAR AS route_response
+                """
+                cursor.execute(query)
+                row = cursor.fetchone()
+                if row is None:
+                    if attempt < max_retries - 1:
+                        import time as time_module
+                        time_module.sleep(2 ** attempt)
+                        continue
+                    self.detour_ors_failures += 1
+                    return None
+
+                response = row[0]
+                if isinstance(response, str):
+                    response = json.loads(response)
+
+                if 'error' in response:
+                    msg = response['error'].get('message', '')
+                    if attempt < max_retries - 1 and 'Could not find routable point' not in msg:
+                        import time as time_module
+                        time_module.sleep(2 ** attempt)
+                        continue
+                    self.detour_ors_failures += 1
+                    logger.warning(f"ORS detour error: {msg}")
+                    return None
+
+                features = response.get('features', [])
+                if not features:
+                    if attempt < max_retries - 1:
+                        import time as time_module
+                        time_module.sleep(2 ** attempt)
+                        continue
+                    self.detour_ors_failures += 1
+                    return None
+
+                feature = features[0]
+                props = feature.get('properties', {})
+                summary = props.get('summary', {})
+                geometry = feature.get('geometry', {})
+                raw_coords = geometry.get('coordinates', [])
+
+                coords_list = [(float(c[0]), float(c[1])) for c in raw_coords if len(c) >= 2]
+
+                origin = waypoint_coords[0]
+                dest = waypoint_coords[-1]
+
+                return RouteResult(
+                    origin_id=origin_id,
+                    dest_id=dest_id,
+                    origin_coords=origin,
+                    dest_coords=dest,
+                    distance_km=summary.get('distance', 0) / 1000,
+                    duration_min=summary.get('duration', 0) / 60,
+                    coordinates=coords_list,
+                    num_points=len(coords_list)
+                )
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"ORS call failed (attempt {attempt+1}/{max_retries}): {e}")
+                    import time as time_module
+                    time_module.sleep(2 ** attempt)
+                    continue
                 self.detour_ors_failures += 1
+                logger.error(f"ORS via-waypoint call failed after {max_retries} attempts: {e}")
                 return None
+            finally:
+                cursor.close()
+        return None
 
-            response = row[0]
-            if isinstance(response, str):
-                response = json.loads(response)
-
-            if 'error' in response:
-                self.detour_ors_failures += 1
-                logger.warning(f"ORS detour error: {response['error'].get('message', '')}")
-                return None
-
-            features = response.get('features', [])
-            if not features:
-                self.detour_ors_failures += 1
-                return None
-
-            feature = features[0]
-            props = feature.get('properties', {})
-            summary = props.get('summary', {})
-            geometry = feature.get('geometry', {})
-            raw_coords = geometry.get('coordinates', [])
-
-            coords_list = [(float(c[0]), float(c[1])) for c in raw_coords if len(c) >= 2]
-
-            origin = waypoint_coords[0]
-            dest = waypoint_coords[-1]
-
-            return RouteResult(
-                origin_id=origin_id,
-                dest_id=dest_id,
-                origin_coords=origin,
-                dest_coords=dest,
-                distance_km=summary.get('distance', 0) / 1000,
-                duration_min=summary.get('duration', 0) / 60,
-                coordinates=coords_list,
-                num_points=len(coords_list)
-            )
-        except Exception as e:
-            self.detour_ors_failures += 1
-            logger.error(f"ORS via-waypoint call failed: {e}")
-            return None
-        finally:
-            cursor.close()
+    def route_between_points(
+        self,
+        from_lng: float, from_lat: float,
+        to_lng: float, to_lat: float
+    ) -> Optional[RouteResult]:
+        return self._call_ors_via_waypoints(
+            [(from_lng, from_lat), (to_lng, to_lat)],
+            origin_id='waypoint_origin',
+            dest_id='waypoint_dest'
+        )
 
     def generate_detour_route(
         self,

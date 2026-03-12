@@ -21,12 +21,12 @@ st.sidebar.header("Filters")
 @st.cache_data(ttl=300)
 def get_filter_options():
     trucks = session.sql("""
-        SELECT DISTINCT TRUCK_ID FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST ORDER BY TRUCK_ID LIMIT 100
+        SELECT DISTINCT TRUCK_ID FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY ORDER BY TRUCK_ID LIMIT 100
     """).collect()
     
     date_range = session.sql("""
         SELECT MIN(DATE(TS)) as min_date, MAX(DATE(TS)) as max_date 
-        FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
+        FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
     """).collect()[0]
     
     return (
@@ -101,13 +101,13 @@ if not generate_button:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        count = session.sql("SELECT COUNT(*) as cnt FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST").collect()[0]['CNT']
+        count = session.sql("SELECT COUNT(*) as cnt FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY").collect()[0]['CNT']
         st.metric("Total Records", f"{count:,}")
     with col2:
-        trucks = session.sql("SELECT COUNT(DISTINCT TRUCK_ID) as cnt FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST").collect()[0]['CNT']
+        trucks = session.sql("SELECT COUNT(DISTINCT TRUCK_ID) as cnt FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY").collect()[0]['CNT']
         st.metric("Unique Trucks", trucks)
     with col3:
-        trips = session.sql("SELECT COUNT(DISTINCT TRIP_ID) as cnt FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST").collect()[0]['CNT']
+        trips = session.sql("SELECT COUNT(DISTINCT TRIP_ID) as cnt FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY").collect()[0]['CNT']
         st.metric("Unique Trips", f"{trips:,}")
     
     st.stop()
@@ -158,7 +158,7 @@ if color_by in ["Origin Location", "Destination Location"]:
         SELECT 
             TRIP_ID,
             LOCATION_ID as loc_id
-        FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
+        FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
         WHERE LOCATION_TYPE = '{location_type}'
           AND LOCATION_ID IS NOT NULL
           AND {where_sql}
@@ -172,7 +172,7 @@ if color_by in ["Origin Location", "Destination Location"]:
             t.TRIP_ID,
             t.SPEED_KMH,
             COALESCE(tl.loc_id, 'UNKNOWN') as location_id
-        FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST t
+        FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY t
         LEFT JOIN trip_locations tl ON t.TRIP_ID = tl.TRIP_ID
         WHERE {where_sql}
     )
@@ -266,7 +266,7 @@ else:
         AVG(SPEED_KMH) as avg_speed,
         AVG(LATITUDE) as center_lat,
         AVG(LONGITUDE) as center_lon
-    FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST
+    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
     WHERE {where_sql}
     GROUP BY h3_cell
     HAVING h3_cell IS NOT NULL
@@ -384,7 +384,7 @@ with col1:
 with col2:
     st.metric("Hexagons", f"{len(result):,}")
 with col3:
-    unique_trucks = session.sql(f"SELECT COUNT(DISTINCT TRUCK_ID) as cnt FROM FLEET_DEMOS.ROUTING.FACT_TRUCK_TELEMETRY_TEST WHERE {where_sql}").collect()[0]['CNT']
+    unique_trucks = session.sql(f"SELECT COUNT(DISTINCT TRUCK_ID) as cnt FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY WHERE {where_sql}").collect()[0]['CNT']
     st.metric("Unique Trucks", unique_trucks)
 with col4:
     avg_speed_overall = sum([row['AVG_SPEED'] * row['POINT_COUNT'] for row in result]) / total_points if total_points > 0 else 0

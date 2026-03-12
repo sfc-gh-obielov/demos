@@ -11,6 +11,7 @@ Key features:
 
 import uuid
 import logging
+import time as time_module
 from datetime import datetime, timedelta, date, time
 from typing import List, Dict, Optional, Tuple, Iterator, Generator
 from dataclasses import dataclass, field
@@ -290,15 +291,17 @@ class ContinuousTelemetryGenerator:
                 logger.debug(f"Truck {truck_id} out of hours, ending day")
                 break
             
+            yield from self._emit_reposition_to(
+                lifecycle, day, trip_num,
+                trip.origin_coords[0], trip.origin_coords[1],
+                trip.origin_id
+            )
+            
             self.generated_trips.append(trip)
             
             yield from self._emit_pre_trip_dwell(lifecycle, trip)
             yield from self._emit_trip_driving(lifecycle, trip)
             yield from self._emit_post_trip_dwell(lifecycle, trip)
-            
-            if trip_num < num_trips - 1:
-                lifecycle.update_position(trip.dest_coords[1], trip.dest_coords[0])
-                lifecycle.current_location_id = trip.dest_id
         
         yield from self._emit_end_of_day(lifecycle, day)
     
@@ -339,9 +342,6 @@ class ContinuousTelemetryGenerator:
         if origin_coords is None or dest_coords is None:
             logger.warning(f"Missing coordinates for OD pair {origin_id} -> {dest_id}, falling back to random")
             return self._plan_trip_random(lifecycle, day, trip_num)
-        
-        lifecycle.update_position(origin_coords[1], origin_coords[0])
-        lifecycle.current_location_id = origin_id
         
         route_variation = sched_entry.get('route_variation', 'OPTIMAL')
         is_detour = route_variation in ('MINOR_DEVIATION', 'MEDIUM_DEVIATION', 'MAJOR_DEVIATION', 'DETOUR')
@@ -494,6 +494,38 @@ class ContinuousTelemetryGenerator:
         
         return dest_row, trip_type
     
+    def _emit_reposition_to(
+        self,
+        lifecycle: TruckLifecycle,
+        day: date,
+        trip_num: int,
+        dest_lng: float,
+        dest_lat: float,
+        dest_location_id: str
+    ) -> Iterator[TelemetryPoint]:
+        dist_km = haversine_distance(
+            lifecycle.current_lat, lifecycle.current_lng,
+            dest_lat, dest_lng
+        )
+        if dist_km < 0.5:
+            lifecycle.update_position(dest_lat, dest_lng)
+            lifecycle.current_location_id = dest_location_id
+            return
+
+        reposition_route = self.router.route_between_points(
+            lifecycle.current_lng, lifecycle.current_lat,
+            dest_lng, dest_lat
+        )
+        if reposition_route:
+            repo_trip_id = f"{day.strftime('%Y%m%d')}-{lifecycle.truck_id}-REPO-{trip_num:02d}"
+            lifecycle.start_trip(repo_trip_id)
+            lifecycle.current_state = TruckState.DRIVING
+            yield from self._emit_driving_along_route(lifecycle, reposition_route)
+            lifecycle.end_trip()
+
+        lifecycle.update_position(dest_lat, dest_lng)
+        lifecycle.current_location_id = dest_location_id
+
     def _emit_pre_trip_dwell(
         self,
         lifecycle: TruckLifecycle,
@@ -539,8 +571,14 @@ class ContinuousTelemetryGenerator:
             if lifecycle.needs_break(break_threshold_min / 60):
                 rest_stop = self._find_nearby_rest_stop(lat, lng)
                 if rest_stop:
-                    lifecycle.update_position(rest_stop[2], rest_stop[1])
-                    lifecycle.current_location_id = rest_stop[0]
+                    rest_stop_id, rs_lng, rs_lat, rs_type = rest_stop
+                    route_to_stop = self.router.route_between_points(lng, lat, rs_lng, rs_lat)
+                    if route_to_stop:
+                        lifecycle.current_state = TruckState.DRIVING
+                        yield from self._emit_driving_along_route(lifecycle, route_to_stop)
+
+                    lifecycle.update_position(rs_lat, rs_lng)
+                    lifecycle.current_location_id = rest_stop_id
                     lifecycle.current_state = TruckState.DWELL_REST_STOP
                     
                     break_min = breaks_config.get('mandatory_break_duration_min', 45)
@@ -551,6 +589,13 @@ class ContinuousTelemetryGenerator:
                         interval_sec=self.dwell_interval_sec
                     )
                     lifecycle.take_break(break_min)
+
+                    route_back = self.router.route_between_points(rs_lng, rs_lat, lng, lat)
+                    if route_back:
+                        lifecycle.current_state = TruckState.DRIVING
+                        yield from self._emit_driving_along_route(lifecycle, route_back)
+
+                    lifecycle.update_position(lat, lng)
                     lifecycle.current_state = TruckState.DRIVING
             
             if pending_dwells:
@@ -651,6 +696,67 @@ class ContinuousTelemetryGenerator:
         
         lifecycle.end_trip()
     
+    def _emit_driving_along_route(
+        self,
+        lifecycle: TruckLifecycle,
+        route: RouteResult,
+        is_detour: bool = False
+    ) -> Iterator[TelemetryPoint]:
+        route_points = self._interpolate_route_by_time(route)
+        total_duration_sec = route.duration_min * 60
+        prev_lng, prev_lat = lifecycle.current_lng, lifecycle.current_lat
+
+        for lng, lat, elapsed_sec, segment_speed in route_points:
+            jittered_lat, jittered_lng = self.behavior.add_gps_jitter(lat, lng)
+            is_speeding = self.behavior.should_speed(lifecycle.profile)
+            speed_factor = self.behavior.get_speed_factor(lifecycle.profile, is_speeding)
+
+            speed = simulate_acceleration(
+                segment_speed * speed_factor,
+                elapsed_sec,
+                total_duration_sec,
+                elapsed_sec < 120,
+                (total_duration_sec - elapsed_sec) < 120
+            )
+
+            route_progress = elapsed_sec / total_duration_sec if total_duration_sec > 0 else 0.5
+            posted_speed = estimate_posted_speed(
+                route.distance_km, route.duration_min, self.config,
+                route_progress=route_progress,
+                route_distance_km=route.distance_km
+            )
+            threshold = self.config['speeding']['threshold_factor']
+            actual_speeding = speed > posted_speed * threshold
+            heading = calculate_heading(prev_lng, prev_lat, lng, lat)
+
+            interval_sec = self.moving_interval_sec + self.rng.integers(
+                -self.moving_variance_sec, self.moving_variance_sec + 1
+            )
+            interval_sec = max(15, interval_sec)
+
+            yield TelemetryPoint(
+                telemetry_id=str(uuid.uuid4()),
+                truck_id=lifecycle.truck_id,
+                driver_id=lifecycle.driver_id,
+                trip_id=lifecycle.current_trip_id or f"TRANSIT-{lifecycle.truck_id}",
+                timestamp=lifecycle.current_time,
+                latitude=jittered_lat,
+                longitude=jittered_lng,
+                speed_kmh=speed,
+                heading_deg=heading,
+                posted_speed_kmh=posted_speed,
+                status="MOVING",
+                is_speeding=actual_speeding,
+                is_hos_violation=False,
+                is_detour=is_detour,
+                gps_accuracy_m=self.rng.uniform(5, 20)
+            )
+
+            lifecycle.total_points_generated += 1
+            lifecycle.update_position(lat, lng)
+            lifecycle.advance_time(interval_sec)
+            prev_lng, prev_lat = lng, lat
+
     def _emit_dwell_points(
         self,
         lifecycle: TruckLifecycle,
@@ -658,7 +764,7 @@ class ContinuousTelemetryGenerator:
         location_type: str,
         interval_sec: int
     ) -> Iterator[TelemetryPoint]:
-        """Emit low-frequency pings during stationary periods."""
+        """Emit pings during stationary periods at max 60-second intervals."""
         elapsed_sec = 0.0
         total_sec = duration_min * 60
         
@@ -687,8 +793,8 @@ class ContinuousTelemetryGenerator:
             )
             
             lifecycle.total_points_generated += 1
-            actual_interval = int(interval_sec + self.rng.integers(-60, 61))
-            actual_interval = max(60, actual_interval)
+            actual_interval = int(min(interval_sec, 60) + self.rng.integers(-10, 11))
+            actual_interval = max(30, min(actual_interval, 60))
             lifecycle.advance_time(actual_interval)
             elapsed_sec += actual_interval
     
@@ -701,8 +807,12 @@ class ContinuousTelemetryGenerator:
         current_hour = lifecycle.current_time.hour
         
         if current_hour < 18:
-            remaining_hours = 18 - current_hour
-            lifecycle.advance_time(remaining_hours * 3600)
+            yield from self._emit_dwell_points(
+                lifecycle=lifecycle,
+                duration_min=(18 - current_hour) * 60,
+                location_type="IDLE",
+                interval_sec=60
+            )
         
         dist_to_home = lifecycle.distance_to_home()
         time_to_home_min = (dist_to_home / 60) * 60
@@ -737,7 +847,6 @@ class ContinuousTelemetryGenerator:
                 
                 yield from self._emit_trip_driving(lifecycle, return_trip)
                 
-                lifecycle.update_position(lifecycle.home_coords[1], lifecycle.home_coords[0])
                 lifecycle.current_location_id = lifecycle.home_base_id
                 lifecycle.current_state = TruckState.OVERNIGHT_HOME
                 lifecycle.end_trip()
@@ -753,7 +862,7 @@ class ContinuousTelemetryGenerator:
         lifecycle: TruckLifecycle,
         day: date
     ) -> Iterator[TelemetryPoint]:
-        """Emit overnight telemetry (low frequency, 10-20 min intervals)."""
+        """Emit overnight telemetry at max 60-second intervals."""
         next_day = day + timedelta(days=1)
         next_start = datetime.combine(next_day, time(6, 0))
         
@@ -786,7 +895,7 @@ class ContinuousTelemetryGenerator:
             )
             
             lifecycle.total_points_generated += 1
-            interval = self.rng.integers(600, 1201)
+            interval = self.rng.integers(30, 61)
             lifecycle.advance_time(interval)
     
     def _emit_idle_day(
@@ -794,7 +903,7 @@ class ContinuousTelemetryGenerator:
         lifecycle: TruckLifecycle,
         day: date
     ) -> Iterator[TelemetryPoint]:
-        """Emit telemetry for a non-operating day (parked at current location)."""
+        """Emit telemetry for a non-operating day at max 60-second intervals."""
         next_day = day + timedelta(days=1)
         next_start = datetime.combine(next_day, time(6, 0))
         
@@ -825,7 +934,7 @@ class ContinuousTelemetryGenerator:
             )
             
             lifecycle.total_points_generated += 1
-            interval = self.rng.integers(1200, 3601)
+            interval = self.rng.integers(30, 61)
             lifecycle.advance_time(interval)
     
     def _emit_overnight_wakeup(
