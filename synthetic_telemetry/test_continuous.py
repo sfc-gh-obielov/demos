@@ -24,12 +24,25 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from typing import List, Optional, Tuple
+
 from src.simulate import TruckAssignment, haversine_distance
 from src.driver_profiles import DriverProfile, ProfileType, BehaviorSimulator
 from src.routing import RouteResult, ORSRouter
 
+import math
+
 SRC_SCHEMA = "SYNTHETIC_DATASETS.FLEET_INTELLIGENCE"
 ROUTE_CACHE_TABLE = "FLEET_DEMOS.ROUTING.ROUTE_CACHE"
+
+
+GERMANY_BBOX = {'min_lat': 47.2, 'max_lat': 55.1, 'min_lng': 5.8, 'max_lng': 15.0}
+
+DETOUR_PARAMS = {
+    'MINOR_DEVIATION':  {'offset_min_km': 2,  'offset_max_km': 5,  'num_waypoints': 1, 'dwell_prob': 0.0,  'dwell_min': 0,  'dwell_max': 0},
+    'MEDIUM_DEVIATION': {'offset_min_km': 5,  'offset_max_km': 15, 'num_waypoints': 1, 'dwell_prob': 0.3,  'dwell_min': 5,  'dwell_max': 15},
+    'MAJOR_DEVIATION':  {'offset_min_km': 10, 'offset_max_km': 30, 'num_waypoints': 2, 'dwell_prob': 0.5,  'dwell_min': 10, 'dwell_max': 30},
+}
 
 
 class ScheduleAwareRouter:
@@ -39,6 +52,8 @@ class ScheduleAwareRouter:
         self.conn = conn
         self.cache_hits = 0
         self.cache_misses = 0
+        self.detour_ors_calls = 0
+        self.detour_ors_failures = 0
         self._cache_dict = {}
 
     def _load_route(self, origin_id: str, dest_id: str) -> RouteResult:
@@ -87,38 +102,220 @@ class ScheduleAwareRouter:
         origin_lat: float,
         dest_lng: float,
         dest_lat: float,
-        route_index: int = 0
-    ) -> RouteResult:
+        route_index: int = 0,
+        route_variation: str = 'OPTIMAL',
+        deviation_factor: float = 1.0,
+        rng: np.random.Generator = None
+    ) -> Optional[RouteResult]:
         key = (origin_id, dest_id)
-        if key in self._cache_dict:
-            self.cache_hits += 1
-            return self._cache_dict[key]
+        if key not in self._cache_dict:
+            route = self._load_route(origin_id, dest_id)
+            if route:
+                self._cache_dict[key] = route
+            else:
+                self.cache_misses += 1
+                distance_km = haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)
+                duration_min = (distance_km / 60) * 60
+                num_points = max(10, int(distance_km / 2))
+                coords = []
+                for i in range(num_points):
+                    t = i / (num_points - 1)
+                    coords.append((origin_lng + t * (dest_lng - origin_lng),
+                                   origin_lat + t * (dest_lat - origin_lat)))
+                route = RouteResult(
+                    origin_id=origin_id, dest_id=dest_id,
+                    origin_coords=(origin_lng, origin_lat),
+                    dest_coords=(dest_lng, dest_lat),
+                    distance_km=distance_km, duration_min=duration_min,
+                    coordinates=coords, num_points=len(coords)
+                )
+                self._cache_dict[key] = route
 
-        route = self._load_route(origin_id, dest_id)
-        if route:
-            self._cache_dict[key] = route
-            self.cache_hits += 1
-            return route
+        base_route = self._cache_dict.get(key)
+        if base_route is None:
+            return None
+        self.cache_hits += 1
 
-        self.cache_misses += 1
-        distance_km = haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)
-        duration_min = (distance_km / 60) * 60
-        num_points = max(10, int(distance_km / 2))
-        coords = []
-        for i in range(num_points):
-            t = i / (num_points - 1)
-            coords.append((origin_lng + t * (dest_lng - origin_lng),
-                           origin_lat + t * (dest_lat - origin_lat)))
+        if route_variation in DETOUR_PARAMS and base_route.coordinates and len(base_route.coordinates) >= 10:
+            detour = self.generate_detour_route(base_route, route_variation, deviation_factor, rng)
+            if detour is not None:
+                return detour
+            logger.warning(f"Detour generation failed for {origin_id}->{dest_id}, using base route")
 
-        route = RouteResult(
-            origin_id=origin_id, dest_id=dest_id,
-            origin_coords=(origin_lng, origin_lat),
-            dest_coords=(dest_lng, dest_lat),
-            distance_km=distance_km, duration_min=duration_min,
-            coordinates=coords, num_points=len(coords)
+        return base_route
+
+    def _generate_waypoint(
+        self,
+        coords: List[Tuple[float, float]],
+        progress_pct: float,
+        offset_km: float,
+        rng: np.random.Generator
+    ) -> Tuple[float, float]:
+        idx = int(progress_pct * (len(coords) - 1))
+        idx = max(1, min(idx, len(coords) - 2))
+
+        lng_n, lat_n = coords[idx]
+        lng_prev, lat_prev = coords[idx - 1]
+
+        bearing = math.atan2(lng_n - lng_prev, lat_n - lat_prev)
+        perp = bearing + (math.pi / 2 if rng.random() < 0.5 else -math.pi / 2)
+
+        km_per_deg_lat = 111.32
+        km_per_deg_lng = 111.32 * math.cos(math.radians(lat_n))
+
+        wp_lat = lat_n + (offset_km * math.cos(perp)) / km_per_deg_lat
+        wp_lng = lng_n + (offset_km * math.sin(perp)) / km_per_deg_lng
+
+        wp_lat = max(GERMANY_BBOX['min_lat'], min(GERMANY_BBOX['max_lat'], wp_lat))
+        wp_lng = max(GERMANY_BBOX['min_lng'], min(GERMANY_BBOX['max_lng'], wp_lng))
+
+        return (wp_lng, wp_lat)
+
+    def _call_ors_via_waypoints(
+        self,
+        waypoint_coords: List[Tuple[float, float]],
+        origin_id: str = 'detour_origin',
+        dest_id: str = 'detour_dest'
+    ) -> Optional[RouteResult]:
+        self.detour_ors_calls += 1
+        cursor = self.conn.cursor()
+        try:
+            coord_arrays = ", ".join(
+                f"ARRAY_CONSTRUCT({lng}, {lat})" for lng, lat in waypoint_coords
+            )
+            query = f"""
+                SELECT TO_JSON(OPENROUTESERVICE_NATIVE_APP.CORE.DIRECTIONS(
+                    'driving-hgv',
+                    OBJECT_CONSTRUCT(
+                        'coordinates', ARRAY_CONSTRUCT({coord_arrays})
+                    )
+                ))::VARCHAR AS route_response
+            """
+            cursor.execute(query)
+            row = cursor.fetchone()
+            if row is None:
+                self.detour_ors_failures += 1
+                return None
+
+            response = row[0]
+            if isinstance(response, str):
+                response = json.loads(response)
+
+            if 'error' in response:
+                self.detour_ors_failures += 1
+                logger.warning(f"ORS detour error: {response['error'].get('message', '')}")
+                return None
+
+            features = response.get('features', [])
+            if not features:
+                self.detour_ors_failures += 1
+                return None
+
+            feature = features[0]
+            props = feature.get('properties', {})
+            summary = props.get('summary', {})
+            geometry = feature.get('geometry', {})
+            raw_coords = geometry.get('coordinates', [])
+
+            coords_list = [(float(c[0]), float(c[1])) for c in raw_coords if len(c) >= 2]
+
+            origin = waypoint_coords[0]
+            dest = waypoint_coords[-1]
+
+            return RouteResult(
+                origin_id=origin_id,
+                dest_id=dest_id,
+                origin_coords=origin,
+                dest_coords=dest,
+                distance_km=summary.get('distance', 0) / 1000,
+                duration_min=summary.get('duration', 0) / 60,
+                coordinates=coords_list,
+                num_points=len(coords_list)
+            )
+        except Exception as e:
+            self.detour_ors_failures += 1
+            logger.error(f"ORS via-waypoint call failed: {e}")
+            return None
+        finally:
+            cursor.close()
+
+    def generate_detour_route(
+        self,
+        base_route: RouteResult,
+        route_variation: str,
+        deviation_factor: float,
+        rng: np.random.Generator
+    ) -> Optional[RouteResult]:
+        if rng is None:
+            rng = np.random.default_rng(42)
+
+        params = DETOUR_PARAMS.get(route_variation)
+        if params is None:
+            return None
+
+        coords = base_route.coordinates
+        factor_scale = max(0, (deviation_factor - 1.0) / 0.5)
+        factor_scale = min(1.0, factor_scale)
+
+        offset_km = params['offset_min_km'] + factor_scale * (params['offset_max_km'] - params['offset_min_km'])
+        offset_km *= rng.uniform(0.7, 1.3)
+
+        num_wp = params['num_waypoints']
+        if num_wp >= 2 and rng.random() < 0.5:
+            num_wp = 1
+
+        origin = base_route.origin_coords
+        dest = base_route.dest_coords
+
+        waypoints = []
+        detour_dwell_points = []
+
+        if num_wp == 1:
+            progress = rng.uniform(0.3, 0.7)
+            wp = self._generate_waypoint(coords, progress, offset_km, rng)
+            waypoints.append(wp)
+        else:
+            progress1 = rng.uniform(0.25, 0.40)
+            progress2 = rng.uniform(0.60, 0.75)
+            offset1 = offset_km * rng.uniform(0.6, 1.0)
+            offset2 = offset_km * rng.uniform(0.6, 1.0)
+            wp1 = self._generate_waypoint(coords, progress1, offset1, rng)
+            wp2 = self._generate_waypoint(coords, progress2, offset2, rng)
+            waypoints.extend([wp1, wp2])
+
+        ors_coords = [origin] + waypoints + [dest]
+
+        detour_route = self._call_ors_via_waypoints(
+            ors_coords,
+            origin_id=base_route.origin_id,
+            dest_id=base_route.dest_id
         )
-        self._cache_dict[key] = route
-        return route
+
+        if detour_route is None:
+            reduced_offset = offset_km * 0.5
+            logger.info(f"Retrying detour with reduced offset {reduced_offset:.1f}km")
+            waypoints_retry = []
+            for wp_progress in ([rng.uniform(0.3, 0.7)] if num_wp == 1 else [rng.uniform(0.25, 0.40), rng.uniform(0.60, 0.75)]):
+                waypoints_retry.append(self._generate_waypoint(coords, wp_progress, reduced_offset, rng))
+            ors_coords_retry = [origin] + waypoints_retry + [dest]
+            detour_route = self._call_ors_via_waypoints(
+                ors_coords_retry,
+                origin_id=base_route.origin_id,
+                dest_id=base_route.dest_id
+            )
+            if detour_route is None:
+                return None
+            waypoints = waypoints_retry
+
+        for wp in waypoints:
+            if rng.random() < params['dwell_prob']:
+                dwell_min = rng.uniform(params['dwell_min'], params['dwell_max'])
+                detour_dwell_points.append({'coords': wp, 'dwell_min': dwell_min})
+
+        detour_route.detour_waypoints = waypoints
+        detour_route.detour_dwells = detour_dwell_points
+
+        return detour_route
 
 
 def load_production_data(conn, start_date: str, end_date: str, num_trucks: int = 10):
@@ -477,6 +674,12 @@ def main():
             print(f"  {status}: {count:,}")
 
         print(f"\nRouter stats: {router.cache_hits} cache hits, {router.cache_misses} cache misses")
+        print(f"Detour ORS calls: {router.detour_ors_calls} ({router.detour_ors_failures} failures)")
+
+        detour_pts = telemetry_df[telemetry_df['is_detour'] == True]
+        print(f"Detour telemetry points: {len(detour_pts):,}")
+        dwell_detour_pts = telemetry_df[telemetry_df['status'] == 'DWELL_DETOUR']
+        print(f"Detour dwell points: {len(dwell_detour_pts):,}")
 
         print("\n" + "=" * 70)
         print("VALIDATION: GPS start vs scheduled origin")

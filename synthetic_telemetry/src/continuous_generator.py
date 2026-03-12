@@ -344,8 +344,7 @@ class ContinuousTelemetryGenerator:
         lifecycle.current_location_id = origin_id
         
         route_variation = sched_entry.get('route_variation', 'OPTIMAL')
-        is_detour = route_variation in ('MAJOR_DEVIATION', 'DETOUR')
-        route_index = 0
+        is_detour = route_variation in ('MINOR_DEVIATION', 'MEDIUM_DEVIATION', 'MAJOR_DEVIATION', 'DETOUR')
         
         route = self.router.get_route(
             origin_id=origin_id,
@@ -354,7 +353,9 @@ class ContinuousTelemetryGenerator:
             origin_lat=origin_coords[1],
             dest_lng=dest_coords[0],
             dest_lat=dest_coords[1],
-            route_index=route_index
+            route_variation=route_variation,
+            deviation_factor=sched_entry.get('route_deviation_factor', 1.0),
+            rng=self.rng
         )
         
         if route is None:
@@ -527,6 +528,9 @@ class ContinuousTelemetryGenerator:
         breaks_config = self.config.get('breaks', {})
         break_threshold_min = breaks_config.get('driving_hours_between_breaks', 4.5) * 60
         
+        detour_dwells = getattr(route, 'detour_dwells', []) or []
+        pending_dwells = list(detour_dwells)
+        
         prev_lng, prev_lat = lifecycle.current_lng, lifecycle.current_lat
         
         for point_data in route_points:
@@ -548,6 +552,25 @@ class ContinuousTelemetryGenerator:
                     )
                     lifecycle.take_break(break_min)
                     lifecycle.current_state = TruckState.DRIVING
+            
+            if pending_dwells:
+                remaining = []
+                for dwell_info in pending_dwells:
+                    wp_lng, wp_lat = dwell_info['coords']
+                    dist = haversine_distance(lat, lng, wp_lat, wp_lng)
+                    if dist < 2.0:
+                        lifecycle.update_position(lat, lng)
+                        lifecycle.current_state = TruckState.DWELL_REST_STOP
+                        yield from self._emit_dwell_points(
+                            lifecycle=lifecycle,
+                            duration_min=dwell_info['dwell_min'],
+                            location_type="DWELL_DETOUR",
+                            interval_sec=self.dwell_interval_sec
+                        )
+                        lifecycle.current_state = TruckState.DRIVING
+                    else:
+                        remaining.append(dwell_info)
+                pending_dwells = remaining
             
             jittered_lat, jittered_lng = self.behavior.add_gps_jitter(lat, lng)
             

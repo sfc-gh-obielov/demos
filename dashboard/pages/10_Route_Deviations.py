@@ -335,7 +335,7 @@ with tab3:
                         ST_Y(GEOMETRY) AS LAT,
                         TS,
                         ROW_NUMBER() OVER (ORDER BY TS) AS RN
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_V2
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
                     WHERE TRIP_ID = '{selected_trip}'
                 )
                 SELECT 
