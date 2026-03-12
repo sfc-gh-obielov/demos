@@ -125,6 +125,9 @@ class ContinuousTelemetryGenerator:
     
     Each truck maintains position continuity - only trip_id changes between trips.
     Telemetry is emitted at ~30 second intervals while moving, lower frequency when stationary.
+    
+    When trip_schedule is provided, uses scheduled OD pairs instead of random destinations,
+    ensuring GPS traces match the expected routes.
     """
     
     def __init__(
@@ -135,7 +138,9 @@ class ContinuousTelemetryGenerator:
         behavior: BehaviorSimulator,
         warehouses: pd.DataFrame,
         destinations: pd.DataFrame,
-        rest_stops: pd.DataFrame
+        rest_stops: pd.DataFrame,
+        trip_schedule: Optional[pd.DataFrame] = None,
+        locations: Optional[pd.DataFrame] = None
     ):
         self.config = config
         self.trucks = {t.truck_id: t for t in trucks}
@@ -151,6 +156,40 @@ class ContinuousTelemetryGenerator:
         self.rng = np.random.default_rng(config.get('seed', 42))
         
         self._destination_distances: Dict[str, pd.DataFrame] = {}
+        
+        self._schedule_lookup: Dict[Tuple[str, date], List[Dict]] = {}
+        if trip_schedule is not None and not trip_schedule.empty:
+            sched = trip_schedule.copy()
+            sched.columns = sched.columns.str.lower()
+            for _, row in sched.iterrows():
+                truck_id = row['truck_id']
+                trip_date = row['trip_date']
+                if isinstance(trip_date, str):
+                    trip_date = datetime.strptime(trip_date, '%Y-%m-%d').date()
+                elif hasattr(trip_date, 'date'):
+                    trip_date = trip_date.date() if callable(getattr(trip_date, 'date')) else trip_date
+                key = (truck_id, trip_date)
+                if key not in self._schedule_lookup:
+                    self._schedule_lookup[key] = []
+                self._schedule_lookup[key].append({
+                    'origin_id': row['origin_id'],
+                    'dest_id': row['dest_id'],
+                    'trip_type': row.get('trip_type', 'WAREHOUSE_TO_WAREHOUSE'),
+                    'route_variation': row.get('route_variation', 'OPTIMAL'),
+                    'route_deviation_factor': row.get('route_deviation_factor', 1.0),
+                    'shift_start_time': row.get('shift_start_time', None),
+                })
+            logger.info(f"Loaded schedule for {len(self._schedule_lookup)} truck-day combinations")
+        
+        self._location_coords: Dict[str, Tuple[float, float]] = {}
+        if locations is not None and not locations.empty:
+            loc = locations.copy()
+            loc.columns = loc.columns.str.lower()
+            id_col = next((c for c in ['id', 'warehouse_id', 'destination_id'] if c in loc.columns), None)
+            if id_col:
+                for _, row in loc.iterrows():
+                    self._location_coords[row[id_col]] = (row['longitude'], row['latitude'])
+                logger.info(f"Loaded coordinates for {len(self._location_coords)} locations")
         
         self.lifecycles: Dict[str, TruckLifecycle] = {}
         for truck in trucks:
@@ -210,14 +249,19 @@ class ContinuousTelemetryGenerator:
         lifecycle = self.lifecycles[truck_id]
         truck = self.trucks[truck_id]
         
-        is_weekend = day.weekday() >= 5
-        operating_rate = (
-            self.config['fleet']['weekend_operating_rate']
-            if is_weekend else
-            self.config['fleet']['weekday_operating_rate']
-        )
+        schedule_key = (truck_id, day)
+        has_schedule = schedule_key in self._schedule_lookup
         
-        is_operating = self.rng.random() < operating_rate
+        if has_schedule:
+            is_operating = True
+        else:
+            is_weekend = day.weekday() >= 5
+            operating_rate = (
+                self.config['fleet']['weekend_operating_rate']
+                if is_weekend else
+                self.config['fleet']['weekday_operating_rate']
+            )
+            is_operating = self.rng.random() < operating_rate
         
         start_hour = self.rng.integers(5, 8)
         lifecycle.start_new_day(day, start_hour)
@@ -229,7 +273,10 @@ class ContinuousTelemetryGenerator:
             yield from self._emit_idle_day(lifecycle, day)
             return
         
-        num_trips = self._get_trips_for_day(truck)
+        if has_schedule:
+            num_trips = len(self._schedule_lookup[schedule_key])
+        else:
+            num_trips = self._get_trips_for_day(truck)
         
         for trip_num in range(num_trips):
             if lifecycle.current_time.hour >= 20:
@@ -266,7 +313,78 @@ class ContinuousTelemetryGenerator:
         day: date,
         trip_num: int
     ) -> Optional[Trip]:
-        """Plan a trip from current position."""
+        """Plan a trip from current position, using schedule if available."""
+        schedule_key = (lifecycle.truck_id, day)
+        scheduled = self._schedule_lookup.get(schedule_key)
+        
+        if scheduled and trip_num < len(scheduled):
+            return self._plan_trip_from_schedule(lifecycle, day, trip_num, scheduled[trip_num])
+        
+        return self._plan_trip_random(lifecycle, day, trip_num)
+    
+    def _plan_trip_from_schedule(
+        self,
+        lifecycle: TruckLifecycle,
+        day: date,
+        trip_num: int,
+        sched_entry: Dict
+    ) -> Optional[Trip]:
+        """Plan a trip using a scheduled OD pair."""
+        origin_id = sched_entry['origin_id']
+        dest_id = sched_entry['dest_id']
+        
+        origin_coords = self._location_coords.get(origin_id)
+        dest_coords = self._location_coords.get(dest_id)
+        
+        if origin_coords is None or dest_coords is None:
+            logger.warning(f"Missing coordinates for OD pair {origin_id} -> {dest_id}, falling back to random")
+            return self._plan_trip_random(lifecycle, day, trip_num)
+        
+        lifecycle.update_position(origin_coords[1], origin_coords[0])
+        lifecycle.current_location_id = origin_id
+        
+        route_variation = sched_entry.get('route_variation', 'OPTIMAL')
+        is_detour = route_variation in ('MAJOR_DEVIATION', 'DETOUR')
+        route_index = 0
+        
+        route = self.router.get_route(
+            origin_id=origin_id,
+            dest_id=dest_id,
+            origin_lng=origin_coords[0],
+            origin_lat=origin_coords[1],
+            dest_lng=dest_coords[0],
+            dest_lat=dest_coords[1],
+            route_index=route_index
+        )
+        
+        if route is None:
+            logger.warning(f"No route for truck {lifecycle.truck_id} scheduled trip {origin_id} -> {dest_id}")
+            return None
+        
+        trip_id = f"{day.strftime('%Y%m%d')}-{lifecycle.truck_id}-{trip_num:02d}"
+        
+        return Trip(
+            trip_id=trip_id,
+            truck_id=lifecycle.truck_id,
+            driver_id=lifecycle.driver_id,
+            origin_id=origin_id,
+            dest_id=dest_id,
+            origin_coords=origin_coords,
+            dest_coords=dest_coords,
+            scheduled_start=lifecycle.current_time,
+            trip_type=sched_entry.get('trip_type', 'WAREHOUSE_TO_WAREHOUSE'),
+            route_variation=route_variation,
+            route=route,
+            is_detour=is_detour
+        )
+    
+    def _plan_trip_random(
+        self,
+        lifecycle: TruckLifecycle,
+        day: date,
+        trip_num: int
+    ) -> Optional[Trip]:
+        """Plan a trip with random destination (fallback when no schedule)."""
         origin_coords = (lifecycle.current_lng, lifecycle.current_lat)
         origin_id = lifecycle.current_location_id or lifecycle.home_base_id
         
@@ -812,7 +930,9 @@ def generate_continuous_telemetry(
     rest_stops: pd.DataFrame,
     start_date: date,
     end_date: date,
-    chunk_size_days: int = 7
+    chunk_size_days: int = 7,
+    trip_schedule: Optional[pd.DataFrame] = None,
+    locations: Optional[pd.DataFrame] = None
 ) -> Generator[pd.DataFrame, None, None]:
     """
     Generate continuous telemetry in chunked DataFrames for memory efficiency.
@@ -828,7 +948,9 @@ def generate_continuous_telemetry(
         behavior=behavior,
         warehouses=warehouses,
         destinations=destinations,
-        rest_stops=rest_stops
+        rest_stops=rest_stops,
+        trip_schedule=trip_schedule,
+        locations=locations
     )
     
     current_chunk_start = start_date
