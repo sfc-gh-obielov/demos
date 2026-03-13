@@ -342,7 +342,7 @@ class ScheduleAwareRouter:
         return detour_route
 
 
-def load_production_data(conn, start_date: str, end_date: str, num_trucks: int = 10):
+def load_production_data(conn, start_date: str, end_date: str, num_trucks: int = 10, schedule_table: str = 'TRIP_SCHEDULE'):
     """Load truck fleet, schedule, locations, and rest stops from production schema."""
     logger.info("Loading truck fleet...")
     truck_fleet = pd.read_sql(f"""
@@ -360,7 +360,7 @@ def load_production_data(conn, start_date: str, end_date: str, num_trucks: int =
     trip_schedule = pd.read_sql(f"""
         SELECT TRUCK_ID, TRIP_DATE, TRIP_TYPE, ROUTE_VARIATION,
             ORIGIN_ID, DEST_ID, SHIFT_START_TIME, ROUTE_DEVIATION_FACTOR, DRIVER_PROFILE
-        FROM {SRC_SCHEMA}.TRIP_SCHEDULE
+        FROM {SRC_SCHEMA}.{schedule_table}
         WHERE TRUCK_ID IN ({truck_ids_sql})
             AND TRIP_DATE BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY TRIP_DATE, TRUCK_ID
@@ -569,6 +569,7 @@ def main():
     parser.add_argument('--days', type=int, default=3)
     parser.add_argument('--save', action='store_true')
     parser.add_argument('--table', default='SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_TEST')
+    parser.add_argument('--schedule-table', default='TRIP_SCHEDULE', dest='schedule_table')
     args = parser.parse_args()
 
     print("=" * 70)
@@ -584,7 +585,7 @@ def main():
     end_date = end_date_dt.strftime('%Y-%m-%d')
 
     truck_fleet, trip_schedule, locations, rest_stops = load_production_data(
-        conn, start_date, end_date, num_trucks=args.trucks
+        conn, start_date, end_date, num_trucks=args.trucks, schedule_table=args.schedule_table
     )
 
     trucks = create_trucks_from_fleet(truck_fleet)

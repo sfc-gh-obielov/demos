@@ -97,7 +97,7 @@ with tab1:
         d.AVG_DISTANCE_DEVIATION_PCT,
         d.MAX_DISTANCE_DEVIATION_PCT
     FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY d
-    WHERE d.TOTAL_TRIPS >= 5
+    WHERE d.TOTAL_TRIPS >= 1
     ORDER BY d.TOTAL_EXCESS_KM DESC
     LIMIT 50
     """
@@ -128,7 +128,7 @@ with tab1:
                 ROUND(AVG(TOTAL_EXCESS_KM), 2) AS avg_excess_km,
                 ROUND(AVG(AVG_DISTANCE_DEVIATION_PCT), 2) AS avg_dist_dev_pct
             FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY
-            WHERE TOTAL_TRIPS >= 5
+            WHERE TOTAL_TRIPS >= 1
             GROUP BY DRIVER_PROFILE
             ORDER BY avg_deviation_rate DESC
             """
@@ -149,7 +149,7 @@ with tab1:
                 ROUND(AVG(DEVIATION_RATE_PCT), 2) AS avg_deviation_rate,
                 ROUND(AVG(TOTAL_EXCESS_KM), 2) AS avg_excess_km
             FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY
-            WHERE TOTAL_TRIPS >= 5
+            WHERE TOTAL_TRIPS >= 1
             GROUP BY TRUCK_TYPE
             ORDER BY avg_deviation_rate DESC
             """
