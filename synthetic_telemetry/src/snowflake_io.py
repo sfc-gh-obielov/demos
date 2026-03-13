@@ -420,6 +420,14 @@ def load_dimension_table(
             auto_create_table=False
         )
         
+        if 'TS' in df_out.columns:
+            cursor.execute(f"""
+                UPDATE {schema}.{table_name}
+                SET TS = TO_TIMESTAMP(DATE_PART('epoch_second', TS) / 1000000)
+                WHERE DATE_PART('epoch_second', TS) > 1e12
+            """)
+            logger.info(f"Applied TS epoch fix to {schema}.{table_name}")
+        
         logger.info(f"Loaded {nrows} rows into {schema}.{table_name}")
         return nrows
         
@@ -566,6 +574,15 @@ def load_violations_table(
             schema=schema.split('.')[1],
             auto_create_table=False
         )
+        
+        for ts_col in ['START_TIME', 'END_TIME']:
+            if ts_col in df_out.columns:
+                cursor.execute(f"""
+                    UPDATE {schema}.FACT_VIOLATION
+                    SET {ts_col} = TO_TIMESTAMP(DATE_PART('epoch_second', {ts_col}) / 1000000)
+                    WHERE DATE_PART('epoch_second', {ts_col}) > 1e12
+                """)
+        logger.info(f"Applied timestamp epoch fix to {schema}.FACT_VIOLATION")
         
         logger.info(f"Loaded {nrows} violations into {schema}.FACT_VIOLATION")
         return nrows

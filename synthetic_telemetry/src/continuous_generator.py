@@ -36,6 +36,8 @@ class TruckState(Enum):
     DRIVING = "DRIVING"
     OVERNIGHT_HOME = "OVERNIGHT_HOME"
     OVERNIGHT_REST_STOP = "OVERNIGHT_REST_STOP"
+    OVERNIGHT_WAREHOUSE = "OVERNIGHT_WAREHOUSE"
+    OVERNIGHT_RETAIL = "OVERNIGHT_RETAIL"
 
 
 @dataclass
@@ -71,8 +73,14 @@ class TruckLifecycle:
         """Reset daily counters, keep position."""
         self.daily_driving_minutes = 0.0
         self.minutes_since_last_break = 0.0
-        if self.current_state in [TruckState.OVERNIGHT_HOME, TruckState.OVERNIGHT_REST_STOP]:
-            self.current_state = TruckState.DWELL_WAREHOUSE if self.current_state == TruckState.OVERNIGHT_HOME else TruckState.DWELL_REST_STOP
+        wakeup_map = {
+            TruckState.OVERNIGHT_HOME: TruckState.DWELL_WAREHOUSE,
+            TruckState.OVERNIGHT_REST_STOP: TruckState.DWELL_REST_STOP,
+            TruckState.OVERNIGHT_WAREHOUSE: TruckState.DWELL_WAREHOUSE,
+            TruckState.OVERNIGHT_RETAIL: TruckState.DWELL_DESTINATION,
+        }
+        if self.current_state in wakeup_map:
+            self.current_state = wakeup_map[self.current_state]
         self.current_time = datetime.combine(day, time(start_hour, 0))
     
     def can_start_trip(self, trip_duration_min: float, max_daily_hours: float = 9.0) -> bool:
@@ -271,6 +279,8 @@ class ContinuousTelemetryGenerator:
         lifecycle.start_new_day(day, start_hour)
         
         if lifecycle.current_state == TruckState.OVERNIGHT_REST_STOP:
+            yield from self._emit_overnight_wakeup(lifecycle, day)
+        elif lifecycle.current_state in (TruckState.OVERNIGHT_WAREHOUSE, TruckState.OVERNIGHT_RETAIL):
             yield from self._emit_overnight_wakeup(lifecycle, day)
         
         if not is_operating:
@@ -705,7 +715,10 @@ class ContinuousTelemetryGenerator:
             dwell_min = self.rng.uniform(15, 45)
             dwell_status = "DWELL_STORE"
         else:
-            dwell_min = self.behavior.get_dwell_duration('warehouse')
+            dwell_min = float(self.rng.lognormal(np.log(45), 0.5))
+            dwell_min = max(20, min(dwell_min, 180))
+            if self.rng.random() < 0.05:
+                dwell_min = self.rng.uniform(480, 1440)
             dwell_status = "DWELL_DESTINATION"
         
         lifecycle.current_state = TruckState.DWELL_DESTINATION
@@ -840,7 +853,15 @@ class ContinuousTelemetryGenerator:
         dist_to_home = lifecycle.distance_to_home()
         time_to_home_min = (dist_to_home / 60) * 60
         
-        if dist_to_home < 50 or time_to_home_min < 90:
+        loc_type = self._location_types.get(lifecycle.current_location_id, 'WAREHOUSE')
+        stay_at_dest = self.rng.random() < 0.35
+
+        if stay_at_dest and lifecycle.current_location_id:
+            if loc_type == 'RETAIL':
+                lifecycle.current_state = TruckState.OVERNIGHT_RETAIL
+            else:
+                lifecycle.current_state = TruckState.OVERNIGHT_WAREHOUSE
+        elif dist_to_home < 50 or time_to_home_min < 90:
             route_home = self.router.get_route(
                 origin_id=lifecycle.current_location_id or "current",
                 dest_id=lifecycle.home_base_id,
@@ -874,9 +895,19 @@ class ContinuousTelemetryGenerator:
                 lifecycle.current_state = TruckState.OVERNIGHT_HOME
                 lifecycle.end_trip()
             else:
-                lifecycle.current_state = TruckState.OVERNIGHT_REST_STOP
+                if loc_type == 'RETAIL':
+                    lifecycle.current_state = TruckState.OVERNIGHT_RETAIL
+                elif loc_type == 'WAREHOUSE':
+                    lifecycle.current_state = TruckState.OVERNIGHT_WAREHOUSE
+                else:
+                    lifecycle.current_state = TruckState.OVERNIGHT_REST_STOP
         else:
-            lifecycle.current_state = TruckState.OVERNIGHT_REST_STOP
+            if loc_type == 'RETAIL':
+                lifecycle.current_state = TruckState.OVERNIGHT_RETAIL
+            elif loc_type == 'WAREHOUSE':
+                lifecycle.current_state = TruckState.OVERNIGHT_WAREHOUSE
+            else:
+                lifecycle.current_state = TruckState.OVERNIGHT_REST_STOP
         
         yield from self._emit_overnight(lifecycle, day)
     
@@ -885,17 +916,26 @@ class ContinuousTelemetryGenerator:
         lifecycle: TruckLifecycle,
         day: date
     ) -> Iterator[TelemetryPoint]:
-        """Emit overnight telemetry at max 60-second intervals."""
+        """Emit overnight telemetry with duration variety."""
+        overnight_hours = self._pick_overnight_hours(day)
+        wake_time = lifecycle.current_time + timedelta(hours=overnight_hours)
         next_day = day + timedelta(days=1)
-        next_start = datetime.combine(next_day, time(6, 0))
+        next_start = datetime.combine(next_day, time(self.rng.integers(5, 8), 0))
+        end_time = min(wake_time, next_start)
         
         overnight_id = f"{day.strftime('%Y%m%d')}-{lifecycle.truck_id}-OVERNIGHT"
         
-        while lifecycle.current_time < next_start:
+        state_to_status = {
+            TruckState.OVERNIGHT_HOME: "OVERNIGHT_HOME",
+            TruckState.OVERNIGHT_REST_STOP: "OVERNIGHT_REST_STOP",
+            TruckState.OVERNIGHT_WAREHOUSE: "OVERNIGHT_WAREHOUSE",
+            TruckState.OVERNIGHT_RETAIL: "OVERNIGHT_RETAIL",
+        }
+        location_type = state_to_status.get(lifecycle.current_state, "OVERNIGHT_REST_STOP")
+        
+        while lifecycle.current_time < end_time:
             jittered_lat = lifecycle.current_lat + self.rng.normal(0, 0.00001)
             jittered_lng = lifecycle.current_lng + self.rng.normal(0, 0.00001)
-            
-            location_type = "OVERNIGHT_HOME" if lifecycle.current_state == TruckState.OVERNIGHT_HOME else "OVERNIGHT_REST_STOP"
             
             yield TelemetryPoint(
                 telemetry_id=str(uuid.uuid4()),
@@ -920,6 +960,18 @@ class ContinuousTelemetryGenerator:
             lifecycle.total_points_generated += 1
             interval = self.rng.integers(30, 61)
             lifecycle.advance_time(interval)
+    
+    def _pick_overnight_hours(self, day: date) -> float:
+        is_weekend = day.weekday() >= 4
+        if is_weekend:
+            return float(self.rng.uniform(10, 14))
+        roll = self.rng.random()
+        if roll < 0.15:
+            return float(self.rng.uniform(5, 7))
+        elif roll < 0.80:
+            return float(self.rng.uniform(8, 11))
+        else:
+            return float(self.rng.uniform(11, 14))
     
     def _emit_idle_day(
         self,

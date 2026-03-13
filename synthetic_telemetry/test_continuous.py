@@ -499,6 +499,13 @@ def save_to_snowflake(telemetry_df: pd.DataFrame, table: str):
     )
     logger.info(f"Uploaded {nrows} rows")
 
+    logger.info("Fixing TS epoch (write_pandas uploads nanosecond timestamps)...")
+    cursor.execute(f"""
+        UPDATE {table}
+        SET TS = TO_TIMESTAMP(DATE_PART('epoch_second', TS) / 1000000)
+        WHERE DATE_PART('epoch_second', TS) > 1e12
+    """)
+
     logger.info("Adding GEOMETRY column from lat/lng...")
     cursor.execute(f"""
         UPDATE {table}
