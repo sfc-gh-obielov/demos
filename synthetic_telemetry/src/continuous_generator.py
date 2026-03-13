@@ -183,6 +183,7 @@ class ContinuousTelemetryGenerator:
             logger.info(f"Loaded schedule for {len(self._schedule_lookup)} truck-day combinations")
         
         self._location_coords: Dict[str, Tuple[float, float]] = {}
+        self._location_types: Dict[str, str] = {}
         if locations is not None and not locations.empty:
             loc = locations.copy()
             loc.columns = loc.columns.str.lower()
@@ -190,6 +191,8 @@ class ContinuousTelemetryGenerator:
             if id_col:
                 for _, row in loc.iterrows():
                     self._location_coords[row[id_col]] = (row['longitude'], row['latitude'])
+                    if 'location_type' in row.index:
+                        self._location_types[row[id_col]] = row.get('location_type', 'WAREHOUSE')
                 logger.info(f"Loaded coordinates for {len(self._location_coords)} locations")
         
         self.lifecycles: Dict[str, TruckLifecycle] = {}
@@ -364,6 +367,9 @@ class ContinuousTelemetryGenerator:
         
         trip_id = f"{day.strftime('%Y%m%d')}-{lifecycle.truck_id}-{trip_num:02d}"
         
+        origin_loc_type = self._location_types.get(origin_id, 'WAREHOUSE')
+        dest_loc_type = self._location_types.get(dest_id, 'WAREHOUSE')
+        
         return Trip(
             trip_id=trip_id,
             truck_id=lifecycle.truck_id,
@@ -376,7 +382,9 @@ class ContinuousTelemetryGenerator:
             trip_type=sched_entry.get('trip_type', 'WAREHOUSE_TO_WAREHOUSE'),
             route_variation=route_variation,
             route=route,
-            is_detour=is_detour
+            is_detour=is_detour,
+            origin_location_type=origin_loc_type,
+            dest_location_type=dest_loc_type
         )
     
     def _plan_trip_random(
@@ -423,6 +431,9 @@ class ContinuousTelemetryGenerator:
         
         trip_id = f"{day.strftime('%Y%m%d')}-{lifecycle.truck_id}-{trip_num:02d}"
         
+        origin_loc_type = self._location_types.get(origin_id, 'WAREHOUSE')
+        dest_loc_type = self._location_types.get(dest_id, 'WAREHOUSE')
+        
         return Trip(
             trip_id=trip_id,
             truck_id=lifecycle.truck_id,
@@ -435,7 +446,9 @@ class ContinuousTelemetryGenerator:
             trip_type=trip_type,
             route_variation=route_variation,
             route=route,
-            is_detour=is_detour
+            is_detour=is_detour,
+            origin_location_type=origin_loc_type,
+            dest_location_type=dest_loc_type
         )
     
     def _select_destination(
@@ -531,9 +544,15 @@ class ContinuousTelemetryGenerator:
         lifecycle: TruckLifecycle,
         trip: Trip
     ) -> Iterator[TelemetryPoint]:
-        """Emit dwell telemetry before trip starts (loading)."""
-        dwell_min = self.behavior.get_dwell_duration('warehouse')
-        dwell_min = min(dwell_min, 60)
+        """Emit dwell telemetry before trip starts (loading/pickup)."""
+        if trip.origin_location_type == 'RETAIL':
+            dwell_min = self.rng.uniform(15, 45)
+            dwell_status = "DWELL_STORE"
+        else:
+            dwell_min = self.behavior.get_dwell_duration('warehouse')
+            if self.rng.random() < 0.05:
+                dwell_min = self.behavior.get_dwell_duration('warehouse', is_long_dwell=True)
+            dwell_status = "DWELL_WAREHOUSE"
         
         lifecycle.start_trip(trip.trip_id)
         lifecycle.current_state = TruckState.DWELL_WAREHOUSE
@@ -541,7 +560,7 @@ class ContinuousTelemetryGenerator:
         yield from self._emit_dwell_points(
             lifecycle=lifecycle,
             duration_min=dwell_min,
-            location_type="DWELL_WAREHOUSE",
+            location_type=dwell_status,
             interval_sec=self.dwell_interval_sec
         )
     
@@ -681,16 +700,20 @@ class ContinuousTelemetryGenerator:
         lifecycle: TruckLifecycle,
         trip: Trip
     ) -> Iterator[TelemetryPoint]:
-        """Emit dwell telemetry after trip ends (unloading)."""
-        dwell_min = self.behavior.get_dwell_duration('warehouse')
-        dwell_min = min(dwell_min, 45)
+        """Emit dwell telemetry after trip ends (unloading/delivery)."""
+        if trip.dest_location_type == 'RETAIL':
+            dwell_min = self.rng.uniform(15, 45)
+            dwell_status = "DWELL_STORE"
+        else:
+            dwell_min = self.behavior.get_dwell_duration('warehouse')
+            dwell_status = "DWELL_DESTINATION"
         
         lifecycle.current_state = TruckState.DWELL_DESTINATION
         
         yield from self._emit_dwell_points(
             lifecycle=lifecycle,
             duration_min=dwell_min,
-            location_type="DWELL_DESTINATION",
+            location_type=dwell_status,
             interval_sec=self.dwell_interval_sec
         )
         

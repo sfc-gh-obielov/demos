@@ -63,6 +63,8 @@ class Trip:
     route_variation: str  # OPTIMAL, ALTERNATIVE, DETOUR
     route: Optional[RouteResult] = None
     is_detour: bool = False
+    origin_location_type: str = "WAREHOUSE"
+    dest_location_type: str = "WAREHOUSE"
 
 
 @dataclass 

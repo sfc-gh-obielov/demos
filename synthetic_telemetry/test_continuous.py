@@ -369,7 +369,7 @@ def load_production_data(conn, start_date: str, end_date: str, num_trucks: int =
 
     logger.info("Loading all locations (warehouses + destinations)...")
     locations = pd.read_sql(f"""
-        SELECT ID, NAME, LNG AS LONGITUDE, LAT AS LATITUDE, CITY
+        SELECT ID, NAME, LNG AS LONGITUDE, LAT AS LATITUDE, CITY, LOCATION_TYPE
         FROM {SRC_SCHEMA}.GERMANY_DESTINATIONS
     """, conn)
     logger.info(f"  Loaded {len(locations)} locations")
@@ -592,7 +592,7 @@ def main():
             'num_trucks': args.trucks,
             'weekday_operating_rate': 0.85,
             'weekend_operating_rate': 0.40,
-            'trips_per_day': {'min': 1, 'max': 1}
+            'trips_per_day': {'min': 1, 'max': 3}
         },
         'distance_distribution': {
             'short_pct': 0.60, 'short_max_km': 100,

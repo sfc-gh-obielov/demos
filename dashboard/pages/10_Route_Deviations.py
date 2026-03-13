@@ -309,6 +309,15 @@ with tab3:
         with st.spinner("Loading route geometries..."):
             try:
                 expected_query = f"""
+                WITH trip_od AS (
+                    SELECT TRIP_ID,
+                        FIRST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS) AS origin_loc_id,
+                        LAST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS dest_loc_id
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+                    WHERE TRIP_ID = '{selected_trip}'
+                    QUALIFY ROW_NUMBER() OVER (PARTITION BY TRIP_ID ORDER BY TS) = 1
+                )
                 SELECT 
                     ST_ASGEOJSON(t.EXPECTED_PATH) AS expected_geojson,
                     e.ORIGIN_LAT AS start_lat,
@@ -316,14 +325,9 @@ with tab3:
                     e.DEST_LAT AS end_lat,
                     e.DEST_LNG AS end_lng
                 FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS t
-                JOIN (
-                    SELECT *, ROW_NUMBER() OVER (PARTITION BY TRUCK_ID, TRIP_DATE ORDER BY SHIFT_START_TIME) - 1 AS trip_seq
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.TRIP_SCHEDULE
-                ) s ON s.TRUCK_ID = 'TRK-' || LPAD(REPLACE(t.TRUCK_ID, 'TRK-', ''), 5, '0') 
-                    AND s.TRIP_DATE = t.TRIP_DATE 
-                    AND s.trip_seq = CAST(SPLIT_PART(t.TRIP_ID, '-', 4) AS INTEGER)
+                JOIN trip_od od ON t.TRIP_ID = od.TRIP_ID
                 JOIN FLEET_DEMOS.ROUTE_DEVIATIONS.OD_EXPECTED_ROUTES e 
-                    ON s.ORIGIN_ID = e.ORIGIN_ID AND s.DEST_ID = e.DEST_ID
+                    ON e.ORIGIN_ID = od.origin_loc_id AND e.DEST_ID = od.dest_loc_id
                 WHERE t.TRIP_ID = '{selected_trip}'
                 """
                 geom_df = session.sql(expected_query).to_pandas()
