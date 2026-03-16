@@ -426,14 +426,8 @@ def create_trucks_from_fleet(truck_fleet: pd.DataFrame) -> List[TruckAssignment]
     return trucks
 
 
-def save_to_snowflake(telemetry_df: pd.DataFrame, table: str):
-    """Save telemetry to Snowflake."""
-    import snowflake.connector
-    from snowflake.connector.pandas_tools import write_pandas
-
-    conn = snowflake.connector.connect(connection_name='airpublic')
+def create_target_table(conn, table: str):
     cursor = conn.cursor()
-
     cursor.execute(f"DROP TABLE IF EXISTS {table}")
     cursor.execute(f"""
         CREATE TABLE {table} (
@@ -458,6 +452,12 @@ def save_to_snowflake(telemetry_df: pd.DataFrame, table: str):
             GEOMETRY GEOGRAPHY
         )
     """)
+    cursor.close()
+    logger.info(f"Created table {table}")
+
+
+def append_batch(conn, telemetry_df: pd.DataFrame, table: str):
+    from snowflake.connector.pandas_tools import write_pandas
 
     df_out = telemetry_df.rename(columns={
         'timestamp': 'TS',
@@ -486,11 +486,9 @@ def save_to_snowflake(telemetry_df: pd.DataFrame, table: str):
                  'LOCATION_ID', 'LOCATION_TYPE']
     df_out = df_out[[c for c in keep_cols if c in df_out.columns]]
 
-    db = table.split('.')[0]
-    schema = table.split('.')[1]
-    tbl_name = table.split('.')[2]
+    db, schema, tbl_name = table.split('.')
 
-    logger.info(f"Uploading {len(df_out)} rows...")
+    logger.info(f"Uploading batch of {len(df_out)} rows...")
     success, nchunks, nrows, _ = write_pandas(
         conn, df_out, tbl_name,
         database=db, schema=schema,
@@ -499,23 +497,20 @@ def save_to_snowflake(telemetry_df: pd.DataFrame, table: str):
     )
     logger.info(f"Uploaded {nrows} rows")
 
-    logger.info("Fixing TS epoch (write_pandas uploads nanosecond timestamps)...")
+    cursor = conn.cursor()
     cursor.execute(f"""
         UPDATE {table}
         SET TS = TO_TIMESTAMP(DATE_PART('epoch_second', TS) / 1000000)
         WHERE DATE_PART('epoch_second', TS) > 1e12
     """)
-
-    logger.info("Adding GEOMETRY column from lat/lng...")
     cursor.execute(f"""
         UPDATE {table}
         SET GEOMETRY = ST_MAKEPOINT(LONGITUDE, LATITUDE)
-        WHERE LATITUDE IS NOT NULL AND LONGITUDE IS NOT NULL
+        WHERE LATITUDE IS NOT NULL AND LONGITUDE IS NOT NULL AND GEOMETRY IS NULL
     """)
-    logger.info(f"Done. Saved {nrows} rows to {table}")
-
     cursor.close()
-    conn.close()
+    logger.info(f"Batch done: {nrows} rows appended to {table}")
+    return nrows
 
 
 def validate_gps_vs_schedule(telemetry_df: pd.DataFrame, trip_schedule: pd.DataFrame, locations: pd.DataFrame):
@@ -662,11 +657,17 @@ def main():
 
     logger.info(f"\nGenerating telemetry from {start_dt} to {end_dt}...")
 
-    all_points = []
+    if args.save:
+        save_conn = snowflake.connector.connect(connection_name='airpublic')
+        create_target_table(save_conn, args.table)
+
+    FLUSH_SIZE = 500_000
+    total_saved = 0
+    buffer = []
     point_count = 0
 
     for point in generator.generate_continuous(start_dt, end_dt):
-        all_points.append({
+        buffer.append({
             'telemetry_id': point.telemetry_id,
             'truck_id': point.truck_id,
             'driver_id': point.driver_id,
@@ -686,43 +687,36 @@ def main():
             'location_type': point.location_type
         })
         point_count += 1
-        if point_count % 5000 == 0:
-            logger.info(f"  Generated {point_count} points...")
+        if point_count % 50000 == 0:
+            logger.info(f"  Generated {point_count:,} points so far...")
 
-    logger.info(f"\nTotal points generated: {len(all_points)}")
+        if len(buffer) >= FLUSH_SIZE and args.save:
+            batch_df = pd.DataFrame(buffer)
+            logger.info(f"Flushing batch: {len(batch_df):,} points, {batch_df['truck_id'].nunique()} trucks")
+            nrows = append_batch(save_conn, batch_df, args.table)
+            total_saved += nrows
+            buffer = []
 
-    if all_points:
-        telemetry_df = pd.DataFrame(all_points)
-
-        print("\n" + "=" * 70)
-        print("GENERATION SUMMARY")
-        print("=" * 70)
-        print(f"\nTotal telemetry points: {len(telemetry_df):,}")
-        print(f"Unique trucks: {telemetry_df['truck_id'].nunique()}")
-        print(f"Unique trips: {telemetry_df['trip_id'].nunique()}")
-
-        print(f"\nPoints by status:")
-        for status, count in telemetry_df['status'].value_counts().items():
-            print(f"  {status}: {count:,}")
-
-        print(f"\nRouter stats: {router.cache_hits} cache hits, {router.cache_misses} cache misses")
-        print(f"Detour ORS calls: {router.detour_ors_calls} ({router.detour_ors_failures} failures)")
-
-        detour_pts = telemetry_df[telemetry_df['is_detour'] == True]
-        print(f"Detour telemetry points: {len(detour_pts):,}")
-        dwell_detour_pts = telemetry_df[telemetry_df['status'] == 'DWELL_DETOUR']
-        print(f"Detour dwell points: {len(dwell_detour_pts):,}")
-
-        print("\n" + "=" * 70)
-        print("VALIDATION: GPS start vs scheduled origin")
-        print("=" * 70)
-        validate_gps_vs_schedule(telemetry_df, trip_schedule, locations)
-
+    if buffer:
+        batch_df = pd.DataFrame(buffer)
+        logger.info(f"Final flush: {len(batch_df):,} points")
         if args.save:
-            print("\n" + "=" * 70)
-            print(f"Saving to {args.table}...")
-            save_to_snowflake(telemetry_df, args.table)
-            print("=" * 70)
+            nrows = append_batch(save_conn, batch_df, args.table)
+            total_saved += nrows
+        buffer = []
+
+    print("\n" + "=" * 70)
+    print("GENERATION SUMMARY")
+    print("=" * 70)
+    print(f"\nTotal telemetry points generated: {point_count:,}")
+    if args.save:
+        print(f"Total rows saved to {args.table}: {total_saved:,}")
+
+    print(f"\nRouter stats: {router.cache_hits} cache hits, {router.cache_misses} cache misses")
+    print(f"Detour ORS calls: {router.detour_ors_calls} ({router.detour_ors_failures} failures)")
+
+    if args.save:
+        save_conn.close()
 
     conn.close()
     print("\nDone!")

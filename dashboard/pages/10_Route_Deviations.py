@@ -314,7 +314,7 @@ with tab3:
                         FIRST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS) AS origin_loc_id,
                         LAST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS
                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS dest_loc_id
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_2W
                     WHERE TRIP_ID = '{selected_trip}'
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY TRIP_ID ORDER BY TS) = 1
                 )
@@ -339,7 +339,7 @@ with tab3:
                         ST_Y(GEOMETRY) AS LAT,
                         TS,
                         ROW_NUMBER() OVER (ORDER BY TS) AS RN
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_2W
                     WHERE TRIP_ID = '{selected_trip}'
                 )
                 SELECT 
