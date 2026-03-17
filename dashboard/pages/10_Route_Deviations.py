@@ -25,7 +25,7 @@ SELECT
     SUM(CASE WHEN IS_DURATION_DEVIATION THEN 1 ELSE 0 END) AS duration_dev_trips,
     ROUND(SUM(CASE WHEN IS_ROUTE_DEVIATION THEN DISTANCE_DEVIATION_KM ELSE 0 END), 0) AS total_excess_km,
     ROUND(SUM(CASE WHEN IS_ROUTE_DEVIATION THEN DURATION_DEVIATION_MIN ELSE 0 END), 0) AS total_excess_min
-FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS
+FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.TRIP_DEVIATION_ANALYSIS
 """
 kpi_df = session.sql(kpi_query).to_pandas()
 
@@ -48,7 +48,7 @@ st.divider()
 with st.sidebar:
     st.header("Filters")
 
-    variation_query = "SELECT DISTINCT ROUTE_VARIATION FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS ORDER BY ROUTE_VARIATION"
+    variation_query = "SELECT DISTINCT ROUTE_VARIATION FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.TRIP_DEVIATION_ANALYSIS ORDER BY ROUTE_VARIATION"
     variations_df = session.sql(variation_query).to_pandas()
     selected_variations = st.multiselect(
         "Route Variation",
@@ -56,7 +56,7 @@ with st.sidebar:
         default=None
     )
 
-    trip_type_query = "SELECT DISTINCT TRIP_TYPE FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS ORDER BY TRIP_TYPE"
+    trip_type_query = "SELECT DISTINCT TRIP_TYPE FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.TRIP_DEVIATION_ANALYSIS ORDER BY TRIP_TYPE"
     trip_types_df = session.sql(trip_type_query).to_pandas()
     selected_trip_types = st.multiselect(
         "Trip Type",
@@ -96,7 +96,7 @@ with tab1:
         d.TOTAL_TIME_LOST_MIN,
         d.AVG_DISTANCE_DEVIATION_PCT,
         d.MAX_DISTANCE_DEVIATION_PCT
-    FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY d
+    FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.DRIVER_DEVIATION_SUMMARY d
     WHERE d.TOTAL_TRIPS >= 1
     ORDER BY d.TOTAL_EXCESS_KM DESC
     LIMIT 50
@@ -127,7 +127,7 @@ with tab1:
                 ROUND(AVG(DEVIATION_RATE_PCT), 2) AS avg_deviation_rate,
                 ROUND(AVG(TOTAL_EXCESS_KM), 2) AS avg_excess_km,
                 ROUND(AVG(AVG_DISTANCE_DEVIATION_PCT), 2) AS avg_dist_dev_pct
-            FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY
+            FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.DRIVER_DEVIATION_SUMMARY
             WHERE TOTAL_TRIPS >= 1
             GROUP BY DRIVER_PROFILE
             ORDER BY avg_deviation_rate DESC
@@ -148,7 +148,7 @@ with tab1:
                 COUNT(*) AS driver_count,
                 ROUND(AVG(DEVIATION_RATE_PCT), 2) AS avg_deviation_rate,
                 ROUND(AVG(TOTAL_EXCESS_KM), 2) AS avg_excess_km
-            FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DRIVER_DEVIATION_SUMMARY
+            FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.DRIVER_DEVIATION_SUMMARY
             WHERE TOTAL_TRIPS >= 1
             GROUP BY TRUCK_TYPE
             ORDER BY avg_deviation_rate DESC
@@ -178,7 +178,7 @@ with tab2:
         TOTAL_EXCESS_DISTANCE_KM,
         AVG_DISTANCE_DEVIATION_PCT,
         AVG_DURATION_DEVIATION_PCT
-    FROM FLEET_DEMOS.ROUTE_DEVIATIONS.DAILY_DEVIATION_TRENDS
+    FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.DAILY_DEVIATION_TRENDS
     ORDER BY TRIP_DATE
     """
     daily_df = session.sql(daily_query).to_pandas()
@@ -247,7 +247,7 @@ with tab3:
         IS_ROUTE_DEVIATION,
         ORIGIN_CITY,
         DEST_CITY
-    FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS
+    FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.TRIP_DEVIATION_ANALYSIS
     WHERE 1=1 {where_clause}
     ORDER BY ABS(DISTANCE_DEVIATION_PCT) DESC
     LIMIT 200
@@ -314,7 +314,7 @@ with tab3:
                         FIRST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS) AS origin_loc_id,
                         LAST_VALUE(LOCATION_ID) OVER (PARTITION BY TRIP_ID ORDER BY TS
                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS dest_loc_id
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_2W
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
                     WHERE TRIP_ID = '{selected_trip}'
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY TRIP_ID ORDER BY TS) = 1
                 )
@@ -324,9 +324,9 @@ with tab3:
                     e.ORIGIN_LNG AS start_lng,
                     e.DEST_LAT AS end_lat,
                     e.DEST_LNG AS end_lng
-                FROM FLEET_DEMOS.ROUTE_DEVIATIONS.TRIP_DEVIATION_ANALYSIS t
+                FROM FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.TRIP_DEVIATION_ANALYSIS t
                 JOIN trip_od od ON t.TRIP_ID = od.TRIP_ID
-                JOIN FLEET_DEMOS.ROUTE_DEVIATIONS.OD_EXPECTED_ROUTES e 
+                JOIN FLEET_INTELLIGENCE.DEVIATION_ANALYSIS.OD_EXPECTED_ROUTES e 
                     ON e.ORIGIN_ID = od.origin_loc_id AND e.DEST_ID = od.dest_loc_id
                 WHERE t.TRIP_ID = '{selected_trip}'
                 """
@@ -339,7 +339,7 @@ with tab3:
                         ST_Y(GEOMETRY) AS LAT,
                         TS,
                         ROW_NUMBER() OVER (ORDER BY TS) AS RN
-                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY_2W
+                    FROM SYNTHETIC_DATASETS.FLEET_INTELLIGENCE.FACT_TRUCK_TELEMETRY
                     WHERE TRIP_ID = '{selected_trip}'
                 )
                 SELECT 
